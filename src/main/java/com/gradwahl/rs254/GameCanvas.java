@@ -16,7 +16,7 @@ public final class GameCanvas extends Canvas implements Runnable {
 
     public GameCanvas(ClientConfig config) {
         this.config = config;
-        this.status = "Ready. Server " + config.host() + ':' + config.port() + ", revision " + config.revision();
+        this.status = "Ready. Server " + "HTTP " + config.host() + ":" + config.httpPort() + " / Game " + config.host() + ":" + config.gamePort() + ", revision " + config.revision();
         setPreferredSize(new Dimension(WIDTH, HEIGHT));
         setIgnoreRepaint(true);
         setFocusable(true);

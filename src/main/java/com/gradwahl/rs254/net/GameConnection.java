@@ -1,104 +1,54 @@
 package com.gradwahl.rs254.net;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.WebSocket;
-import java.nio.ByteBuffer;
-import java.time.Duration;
-import java.util.ArrayDeque;
-import java.util.Queue;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 
-public final class GameConnection implements WebSocket.Listener, AutoCloseable {
-    private final Object lock = new Object();
-    private final Queue<Integer> bytes = new ArrayDeque<>();
-    private final ByteArrayOutputStream partial = new ByteArrayOutputStream();
-    private WebSocket socket;
-    private boolean closed;
+public final class GameConnection implements AutoCloseable {
+    private final Socket socket;
+    private final InputStream in;
+    private final OutputStream out;
 
-    public static GameConnection open(String uri) throws Exception {
-        GameConnection connection = new GameConnection();
-        connection.socket = HttpClient.newHttpClient()
-            .newWebSocketBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
-            .buildAsync(URI.create(uri), connection)
-            .get(20, TimeUnit.SECONDS);
-        return connection;
+    private GameConnection(Socket socket) throws IOException {
+        this.socket = socket;
+        this.in = socket.getInputStream();
+        this.out = socket.getOutputStream();
     }
 
-    public void send(byte[] data) {
-        socket.sendBinary(ByteBuffer.wrap(data), true).join();
+    public static GameConnection openTcp(String host, int port) throws IOException {
+        Socket socket = new Socket();
+        socket.setTcpNoDelay(true);
+        socket.connect(new InetSocketAddress(host, port), 10_000);
+        socket.setSoTimeout(20_000);
+        return new GameConnection(socket);
     }
 
-    public int read() throws InterruptedException, IOException {
-        synchronized (lock) {
-            long deadline = System.currentTimeMillis() + 20_000L;
-            while (bytes.isEmpty() && !closed) {
-                long wait = deadline - System.currentTimeMillis();
-                if (wait <= 0) throw new IOException("Timed out waiting for server data");
-                lock.wait(wait);
-            }
-            if (bytes.isEmpty()) throw new IOException("Connection closed");
-            return bytes.remove();
-        }
+    public void send(byte[] data) throws IOException {
+        out.write(data);
+        out.flush();
     }
 
-    public byte[] readBytes(int len) throws InterruptedException, IOException {
+    public int read() throws IOException {
+        int value = in.read();
+        if (value < 0) throw new IOException("Connection closed by server");
+        return value;
+    }
+
+    public byte[] readBytes(int len) throws IOException {
         byte[] out = new byte[len];
-        for (int i = 0; i < len; i++) out[i] = (byte) read();
+        int off = 0;
+        while (off < len) {
+            int read = in.read(out, off, len - off);
+            if (read < 0) throw new IOException("Connection closed by server while reading " + len + " bytes");
+            off += read;
+        }
         return out;
     }
 
     @Override
-    public CompletionStage<?> onBinary(WebSocket webSocket, ByteBuffer data, boolean last) {
-        byte[] chunk = new byte[data.remaining()];
-        data.get(chunk);
-        synchronized (lock) {
-            if (last && partial.size() == 0) {
-                for (byte b : chunk) bytes.add(b & 0xff);
-            } else {
-                partial.writeBytes(chunk);
-                if (last) {
-                    byte[] full = partial.toByteArray();
-                    partial.reset();
-                    for (byte b : full) bytes.add(b & 0xff);
-                }
-            }
-            lock.notifyAll();
-        }
-        webSocket.request(1);
-        return null;
-    }
-
-    @Override
-    public void onOpen(WebSocket webSocket) {
-        WebSocket.Listener.super.onOpen(webSocket);
-        webSocket.request(1);
-    }
-
-    @Override
-    public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-        synchronized (lock) {
-            closed = true;
-            lock.notifyAll();
-        }
-        return WebSocket.Listener.super.onClose(webSocket, statusCode, reason);
-    }
-
-    @Override
-    public void onError(WebSocket webSocket, Throwable error) {
-        synchronized (lock) {
-            closed = true;
-            lock.notifyAll();
-        }
-    }
-
-    @Override
-    public void close() {
-        closed = true;
-        if (socket != null) socket.sendClose(WebSocket.NORMAL_CLOSURE, "bye");
+    public void close() throws IOException {
+        socket.close();
     }
 }

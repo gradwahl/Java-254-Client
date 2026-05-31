@@ -24,7 +24,7 @@ mkdir target
 
 echo Compiling Java files...
 dir /s /b src\main\java\*.java > sources.txt
-javac -encoding UTF-8 -source 17 -target 17 -d out @sources.txt
+javac -encoding UTF-8 --release 17 -d out @sources.txt
 if errorlevel 1 (
   echo Build failed.
   pause

@@ -25,7 +25,7 @@ public final class LoginClient {
     public LoginResult login(String username, String password, boolean reconnecting) throws Exception {
         int[] crcs = new RemoteCache(config).fetchCrcs();
 
-        try (GameConnection connection = GameConnection.open(config.websocketUri())) {
+        try (GameConnection connection = GameConnection.openTcp(config.host(), config.gamePort())) {
             long userhash = usernameHash(username);
             int loginServer = (int) ((userhash >>> 16) & 0x1f);
 

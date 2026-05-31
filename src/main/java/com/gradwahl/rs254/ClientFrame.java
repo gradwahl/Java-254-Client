@@ -44,7 +44,7 @@ public final class ClientFrame extends JFrame {
     }
 
     private void testLogin(String username, String password) {
-        canvas.setStatus("Connecting to " + config.websocketUri());
+        canvas.setStatus("Fetching /crc from " + config.httpBaseUri() + " then connecting to " + config.gameEndpoint());
         Thread loginThread = new Thread(() -> {
             try {
                 LoginResult result = new LoginClient(config).login(username, password, false);
