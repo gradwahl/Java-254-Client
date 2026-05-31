@@ -1,4 +1,5 @@
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\com\gradwahl\rs254\ClientConfig.java
+C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\com\gradwahl\rs254\ClientDebugger.java
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\com\gradwahl\rs254\ClientFrame.java
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\com\gradwahl\rs254\GameCanvas.java
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\com\gradwahl\rs254\Main.java
