@@ -1,6 +1,6 @@
 # Java 254 Client
 
-Full RS2 build-254 client ported into this project. All 74 original source files are included under `src/main/java/jagex2/`, `sign/`, and `deob/`.
+Full RS2 build-254 client With Native OpenGL-lwjgl
 
 ## Build
 
