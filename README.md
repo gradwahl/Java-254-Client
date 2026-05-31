@@ -40,20 +40,6 @@ You can also launch the packaged JAR directly:
 java -jar target/java-254-client.jar
 ```
 
-Args: `nodeId portOffset [lowmem|highmem] [free|members] storeid`
-
-The port-offset controls both HTTP and game ports:
-- HTTP port = `portOffset + 80`
-- Game port = `portOffset + 43594`
-
-| Script | HTTP port | Game port | portOffset |
-|---|---|---|---|
-| `run.bat` | 80 | 43594 | 0 |
-| `run-8080.bat` | 8080 | 51594 | 8000 |
-| `run-8888.bat` | 8888 | 52402 | 8808 |
-
-If your server uses a non-standard split (e.g. HTTP 8080 but game 43594), edit `getCodeBase()` in `src/main/java/jagex2/client/Client.java`.
-
 ## Distribution
 
 The JAR contains the compiled client classes, so the `target/classes/` folder
