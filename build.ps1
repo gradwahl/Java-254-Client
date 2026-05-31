@@ -20,10 +20,20 @@ $ErrorActionPreference = $previousErrorActionPreference
 if ($javacExitCode -ne 0) {
     throw "javac failed with exit code $javacExitCode"
 }
-jar --create --file target/java-254-client.jar --main-class com.gradwahl.rs254.Main -C target/classes .
+$classpath = (Get-ChildItem lib -Filter *.jar |
+    Sort-Object Name |
+    ForEach-Object { "../lib/$($_.Name)" }) -join " "
+@"
+Manifest-Version: 1.0
+Class-Path: $classpath
+
+"@ | Set-Content -Encoding ascii target/manifest.mf
+
+jar --create --file target/java-254-client.jar --main-class com.gradwahl.rs254.Main --manifest target/manifest.mf -C target/classes .
 if ($LASTEXITCODE -ne 0) {
     throw "jar failed with exit code $LASTEXITCODE. Close any running client and rebuild."
 }
+Remove-Item target/manifest.mf
 
 Write-Host "Build complete: target/java-254-client.jar"
 Write-Host "Run with: run.bat"

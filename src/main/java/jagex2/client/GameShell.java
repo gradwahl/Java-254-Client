@@ -231,15 +231,20 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 	@ObfuscatedName("a.a(Z)V")
 	public void shutdown(boolean arg0) {
 		this.state = -2;
-		this.unload();
-		if (this.frame != null) {
-			try {
-				Thread.sleep(1000L);
-			} catch (Exception var4) {
-			}
-			try {
-				System.exit(0);
-			} catch (Throwable var3) {
+		try {
+			this.unload();
+		} catch (Throwable t) {
+			System.err.println("Error during shutdown: " + t);
+		} finally {
+			if (this.frame != null) {
+				try {
+					Thread.sleep(1000L);
+				} catch (Exception ignored) {
+				}
+				try {
+					System.exit(0);
+				} catch (Throwable ignored) {
+				}
 			}
 		}
 	}

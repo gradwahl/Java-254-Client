@@ -1,0 +1,29 @@
+name: Build JAR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build
+        run: mvn --batch-mode clean package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: java-254-client
+          path: |
+            target/*.jar
+            lib/
