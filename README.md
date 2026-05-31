@@ -16,14 +16,13 @@ Or with PowerShell:
 
 Requires JDK 17+.
 
-The built JAR is written to:
+For a standalone JAR containing the required libraries, use Maven:
 
-```text
-target/java-254-client.jar
+```powershell
+mvn clean package
 ```
 
-The build adds the JARs from `lib/` to the application manifest, allowing
-`target/java-254-client.jar` to be launched directly.
+The standalone JAR is written to `target/`.
 
 ## Run
 
@@ -34,25 +33,14 @@ run.bat
 Using `run.bat` is recommended because it supplies the Java options used by
 LWJGL and starts the client with the default server settings.
 
-You can also launch the packaged JAR directly:
+You can also launch a standalone Maven or GitHub Release JAR directly:
 
 ```powershell
-java -jar target/java-254-client.jar
+java -jar java-254-client.jar
 ```
 
 ## Distribution
 
-The JAR contains the compiled client classes, so the `target/classes/` folder
-is not needed. The dependency JARs are separate and must be distributed with
-the client:
-
-```text
-Java-254-Client/
-|-- lib/
-|   `-- *.jar
-`-- target/
-    `-- java-254-client.jar
-```
-
-Keep the `lib/` and `target/` folders in these relative locations. Moving the
-JAR out of `target/` will prevent it from finding the libraries in `lib/`.
+GitHub Releases provide a single executable JAR containing the compiled client,
+required libraries, and Windows LWJGL natives. No additional `lib/` or
+`target/classes/` folder is required.
