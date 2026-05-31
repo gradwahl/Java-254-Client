@@ -149,10 +149,12 @@ public class signlink implements Runnable {
 				}
 				if (waveplay) {
 					wave = var1 + savereq;
+					AudioPlayer.playWave(wave, wavevol);
 					waveplay = false;
 				}
 				if (midiplay) {
 					midi = var1 + savereq;
+					AudioPlayer.playMidi(midi, midivol);
 					midiplay = false;
 				}
 				savereq = null;
@@ -289,6 +291,33 @@ public class signlink implements Runnable {
 		savebuf = arg0;
 		midiplay = true;
 		savereq = "jingle" + midipos + ".mid";
+	}
+
+	public static synchronized void midistop() {
+		midi = "stop";
+		AudioPlayer.stopMidi();
+	}
+
+	public static synchronized void midipause() {
+		midi = "pause";
+		AudioPlayer.pauseMidi();
+	}
+
+	public static synchronized boolean midiresume() {
+		midi = "resume";
+		AudioPlayer.setMidiVolume(midivol);
+		return AudioPlayer.resumeMidi();
+	}
+
+	public static synchronized void midivolume(int arg0) {
+		midivol = arg0;
+		midi = "voladjust";
+		AudioPlayer.setMidiVolume(arg0);
+	}
+
+	public static synchronized void wavevolume(int arg0) {
+		wavevol = arg0;
+		AudioPlayer.setWaveVolume(arg0);
 	}
 
 	public static void reporterror(String arg0) {

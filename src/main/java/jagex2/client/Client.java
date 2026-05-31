@@ -1426,14 +1426,23 @@ public class Client extends GameShell {
 	@ObfuscatedName("client.f(Z)V")
 	public void stopMidi() {
 		signlink.midifade = 0;
-		signlink.midi = "stop";
+		signlink.midistop();
+	}
+
+	public void pauseMidi() {
+		signlink.midifade = 0;
+		signlink.midipause();
+	}
+
+	public boolean resumeMidi() {
+		return signlink.midiresume();
 	}
 
 	@ObfuscatedName("client.a(IIZ)V")
 	public void setMidiVolume(int arg1, boolean arg2) {
 		signlink.midivol = arg1;
 		if (arg2) {
-			signlink.midi = "voladjust";
+			signlink.midivolume(arg1);
 		}
 	}
 
@@ -1449,7 +1458,7 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.e(II)V")
 	public void setWaveVolume(int arg1) {
-		signlink.wavevol = arg1;
+		signlink.wavevolume(arg1);
 	}
 
 	// GL renderer — null until load() initialises it
@@ -10265,11 +10274,13 @@ public class Client extends GameShell {
 			}
 			if (this.midiActive != var5 && !lowMem) {
 				if (this.midiActive) {
-					this.midiSong = this.nextMidiSong;
-					this.midiFading = false;
-					this.onDemand.request(2, this.midiSong);
+					if (!this.resumeMidi()) {
+						this.midiSong = this.nextMidiSong;
+						this.midiFading = false;
+						this.onDemand.request(2, this.midiSong);
+					}
 				} else {
-					this.stopMidi();
+					this.pauseMidi();
 				}
 				this.nextMusicDelay = 0;
 			}

@@ -90,4 +90,5 @@ C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\jagex2\so
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\jagex2\sound\Wave.java
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\jagex2\wordenc\WordFilter.java
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\jagex2\wordenc\WordPack.java
+C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\sign\AudioPlayer.java
 C:\Users\Callum\Downloads\Project\Github\Java-254-Client\src\main\java\sign\signlink.java
