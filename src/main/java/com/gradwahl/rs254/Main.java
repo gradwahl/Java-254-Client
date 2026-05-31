@@ -12,10 +12,24 @@ public final class Main {
     public static void main(String[] args) throws Exception {
         setupCrashLogging();
         ClientDebugger.enable();
+
+        ClientConfig config = ClientConfig.load();
+        applyConfig(config);
+
         // Default: node-id=10  port-offset=0  highmem  members  storeid=32
         // Override via args: java -jar client.jar 10 0 highmem members 32
         String[] clientArgs = args.length == 5 ? args : new String[]{"10", "0", "highmem", "members", "32"};
         jagex2.client.Client.main(clientArgs);
+    }
+
+    private static void applyConfig(ClientConfig config) {
+        // Publish loaded values as system properties so downstream code can read them
+        System.setProperty("rs254.host", config.host());
+        System.setProperty("rs254.httpPort", String.valueOf(config.httpPort()));
+        System.setProperty("rs254.gamePort", String.valueOf(config.gamePort()));
+        if (!config.dbPath().isEmpty()) {
+            System.setProperty("rs254.dbPath", config.dbPath());
+        }
     }
 
     private static void setupCrashLogging() {
