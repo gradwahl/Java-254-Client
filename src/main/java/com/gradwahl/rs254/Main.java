@@ -2,6 +2,8 @@ package com.gradwahl.rs254;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.io.PrintStream;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -10,8 +12,7 @@ public final class Main {
     private Main() {}
 
     public static void main(String[] args) throws Exception {
-        setupCrashLogging();
-        ClientDebugger.enable();
+        setupErrorLogging();
 
         ClientConfig config = ClientConfig.load();
         applyConfig(config);
@@ -32,30 +33,79 @@ public final class Main {
         }
     }
 
-    private static void setupCrashLogging() {
-        try {
-            File logDir = new File(System.getProperty("user.home"), ".rs254");
-            logDir.mkdirs();
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            File logFile = new File(logDir, "crash_" + timestamp + ".log");
-            PrintStream log = new PrintStream(new FileOutputStream(logFile, true), true);
-            System.setErr(log);
-            System.err.println("Session started: " + LocalDateTime.now());
-            System.err.println("Java: " + System.getProperty("java.version") + " (" + System.getProperty("java.vendor") + ")");
-            System.err.println("OS: " + System.getProperty("os.name") + " " + System.getProperty("os.version"));
-            System.err.println("---");
-            Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
-                System.err.println("\nCRASH on thread [" + t.getName() + "] at " + LocalDateTime.now());
-                e.printStackTrace(System.err);
-                System.err.flush();
-            });
-            System.out.println("Crash log: " + logFile.getAbsolutePath());
-        } catch (Exception e) {
-            // If logging setup fails, fall back to a simple handler
-            Thread.setDefaultUncaughtExceptionHandler((t, ex) -> {
-                System.err.println("UNCAUGHT on thread " + t.getName() + ": " + ex);
-                ex.printStackTrace(System.err);
-            });
+    private static void setupErrorLogging() {
+        System.setErr(new PrintStream(new ErrorLogOutputStream(System.err), true));
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            System.err.println("\nCRASH on thread [" + t.getName() + "] at " + LocalDateTime.now());
+            e.printStackTrace(System.err);
+            System.err.flush();
+        });
+    }
+
+    private static final class ErrorLogOutputStream extends OutputStream {
+        private static final DateTimeFormatter LOG_TIMESTAMP =
+            DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+
+        private final PrintStream console;
+        private OutputStream log;
+        private boolean logUnavailable;
+
+        private ErrorLogOutputStream(PrintStream console) {
+            this.console = console;
+        }
+
+        @Override
+        public synchronized void write(int value) throws IOException {
+            console.write(value);
+            openLogIfNeeded();
+            if (log != null) {
+                log.write(value);
+            }
+        }
+
+        @Override
+        public synchronized void write(byte[] bytes, int offset, int length) throws IOException {
+            console.write(bytes, offset, length);
+            openLogIfNeeded();
+            if (log != null) {
+                log.write(bytes, offset, length);
+            }
+        }
+
+        @Override
+        public synchronized void flush() throws IOException {
+            console.flush();
+            if (log != null) {
+                log.flush();
+            }
+        }
+
+        private void openLogIfNeeded() {
+            if (log != null || logUnavailable) {
+                return;
+            }
+            try {
+                File logDir = resolveLogDir();
+                String timestamp = LocalDateTime.now().format(LOG_TIMESTAMP);
+                log = new FileOutputStream(new File(logDir, "error_" + timestamp + ".log"), true);
+            } catch (IOException e) {
+                logUnavailable = true;
+                console.println("[Logging] Could not create error log: " + e.getMessage());
+            }
+        }
+
+        private File resolveLogDir() {
+            String configuredLogDir = System.getProperty("rs254.logDir");
+            if (configuredLogDir != null && !configuredLogDir.isBlank()) {
+                return new File(configuredLogDir);
+            }
+            try {
+                File jar = new File(Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+                if (jar.isFile()) {
+                    return jar.getParentFile();
+                }
+            } catch (Exception ignored) {}
+            return new File(".");
         }
     }
 }

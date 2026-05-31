@@ -60,20 +60,18 @@ if [ ! -f target/java-254-client.jar ]; then
     bash build.sh
 fi
 
-RS254_DIR="$HOME/.rs254"
-mkdir -p "$RS254_DIR"
-
 echo "Starting RS2 client (HTTP :80, game :43594)..."
 java \
+    -Drs254.logDir="$SCRIPT_DIR" \
     --enable-native-access=ALL-UNNAMED \
     --add-opens java.base/java.lang=ALL-UNNAMED \
     --add-opens java.base/java.lang.reflect=ALL-UNNAMED \
-    -XX:ErrorFile="$RS254_DIR/jvm_crash_%p.log" \
+    -XX:ErrorFile="$SCRIPT_DIR/jvm_crash_%p.log" \
     -cp "lib/*:target/java-254-client.jar" \
     com.gradwahl.rs254.Main 10 0 highmem members 32
 
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
     echo ""
-    echo "Client exited with error code $EXIT_CODE. Check $RS254_DIR/ for crash logs."
+    echo "Client exited with error code $EXIT_CODE. Check $SCRIPT_DIR/ for crash logs."
 fi

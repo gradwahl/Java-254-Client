@@ -8,32 +8,22 @@ import java.util.regex.Pattern;
 
 public record ClientConfig(String host, int httpPort, int gamePort, boolean secure, int revision, String cacheDir, String dbPath) {
 
-    private static final String CONFIG_FILE = "client.json";
-
-    // Relative path within a server install that contains the database
-    private static final String DB_RELATIVE = "lostcity-client" + File.separator + "db.sqlite";
+    private static final String CONFIG_FILE = "config.json";
 
     public static ClientConfig load() {
         File configFile = resolveConfigFile();
         boolean firstRun = !configFile.exists();
 
         if (firstRun) {
-            String detectedDb = detectDbPath(configFile.getParentFile());
             String defaultConfig =
                 "{\n" +
                 "  \"web_host\": \"localhost\",\n" +
                 "  \"web_port\": 80,\n" +
-                "  \"game_port\": 43594,\n" +
-                "  \"db_path\": \"" + detectedDb.replace("\\", "\\\\") + "\"\n" +
+                "  \"game_port\": 43594\n" +
                 "}\n";
             try {
                 Files.writeString(configFile.toPath(), defaultConfig, StandardCharsets.UTF_8);
                 System.out.println("[Config] Created default config: " + configFile.getAbsolutePath());
-                if (!detectedDb.isEmpty()) {
-                    System.out.println("[Config] Auto-detected db_path: " + detectedDb);
-                } else {
-                    System.out.println("[Config] Could not auto-detect db_path — set it manually in client.json");
-                }
                 System.out.println("[Config] Edit it to configure your connection, then restart.");
             } catch (IOException e) {
                 System.err.println("[Config] Warning: could not write " + configFile + ": " + e.getMessage());
@@ -43,25 +33,6 @@ public record ClientConfig(String host, int httpPort, int gamePort, boolean secu
         }
 
         return parseFile(configFile);
-    }
-
-    /**
-     * Walks up from the starting directory (up to 5 levels), scanning all sibling
-     * directories at each level for a {@code lostcity-client/db.sqlite} file.
-     */
-    private static String detectDbPath(File startDir) {
-        File dir = startDir;
-        for (int i = 0; i < 5 && dir != null; i++, dir = dir.getParentFile()) {
-            File[] siblings = dir.listFiles(File::isDirectory);
-            if (siblings == null) continue;
-            for (File sibling : siblings) {
-                File candidate = new File(sibling, DB_RELATIVE);
-                if (candidate.isFile()) {
-                    return candidate.getAbsolutePath();
-                }
-            }
-        }
-        return "";
     }
 
     private static File resolveConfigFile() {
