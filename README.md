@@ -1,34 +1,37 @@
 # Java 254 Client
 
-Early Java desktop client for a LostCity/2004Scape revision 254 server.
+Full RS2 build-254 client ported into this project. All 74 original source files are included under `src/main/java/jagex2/`, `sign/`, and `deob/`.
 
-This is **not a complete game client yet**. The first milestone is a runnable Java shell with the initial login/update protocol pieces:
+## Build
 
-- revision `254`
-- WebSocket transport to `/` on the game server
-- `/crc` checksum loading
-- 254 login handshaking opcodes `14`, `16`, `18`
-- ISAAC cipher implementation
-- client/server protocol constants
-- a Swing/Canvas 50 TPS game loop
+```bat
+build.bat
+```
+
+Or with PowerShell:
+
+```powershell
+.\build.ps1
+```
+
+Requires JDK 17+.
 
 ## Run
 
-```bash
-mvn package
-java -jar target/java-254-client-0.1.0.jar
+```bat
+run.bat
 ```
 
-Default server is `localhost:43594`. You can override it:
+Args: `nodeId portOffset [lowmem|highmem] [free|members] storeid`
 
-```bash
-java -Drs254.host=127.0.0.1 -Drs254.port=43594 -jar target/java-254-client-0.1.0.jar
-```
+The port-offset controls both HTTP and game ports:
+- HTTP port = `portOffset + 80`
+- Game port = `portOffset + 43594`
 
-## Next milestones
+| Script | HTTP port | Game port | portOffset |
+|---|---|---|---|
+| `run.bat` | 80 | 43594 | 0 |
+| `run-8080.bat` | 8080 | 51594 | 8000 |
+| `run-8888.bat` | 8888 | 52402 | 8808 |
 
-1. Decode the title/config/media JAG archives from the HTTP endpoints.
-2. Render the original 765x503 fixed client layout.
-3. Implement inbound packet decoding using `Protocol.Server.SIZES`.
-4. Add player/NPC/map update decoding.
-5. Port Pix2D/Pix3D/model/scene systems from the TypeScript webclient or original 254 Java source.
+If your server uses a non-standard split (e.g. HTTP 8080 but game 43594), edit `getCodeBase()` in `src/main/java/jagex2/client/Client.java`.

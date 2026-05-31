@@ -1,60 +1,54 @@
 package com.gradwahl.rs254;
 
+import com.gradwahl.rs254.net.GameSession;
 import com.gradwahl.rs254.net.LoginClient;
-import com.gradwahl.rs254.net.LoginResult;
 
-import javax.swing.JButton;
 import javax.swing.JFrame;
-import javax.swing.JPanel;
-import javax.swing.JPasswordField;
-import javax.swing.JTextField;
-import java.awt.BorderLayout;
-import java.awt.FlowLayout;
 
 public final class ClientFrame extends JFrame {
     private final GameCanvas canvas;
     private final ClientConfig config;
+    private volatile GameSession session;
 
     public ClientFrame(ClientConfig config) {
         super("Java 254 Client");
         this.config = config;
-        this.canvas = new GameCanvas(config);
+        this.canvas = new GameCanvas(config, this::sessionStatus, this::startLogin);
 
-        JTextField username = new JTextField("Callum", 12);
-        JPasswordField password = new JPasswordField("password", 12);
-        JButton login = new JButton("Test Login");
-        login.addActionListener(e -> testLogin(username.getText(), new String(password.getPassword())));
-
-        JPanel bar = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        bar.add(username);
-        bar.add(password);
-        bar.add(login);
-
-        setLayout(new BorderLayout());
-        add(canvas, BorderLayout.CENTER);
-        add(bar, BorderLayout.SOUTH);
+        add(canvas);
         pack();
-        setResizable(true);
+        setResizable(false);
         setLocationRelativeTo(null);
         setDefaultCloseOperation(EXIT_ON_CLOSE);
     }
 
     public void start() {
         canvas.start();
+        canvas.requestFocusInWindow();
     }
 
-    private void testLogin(String username, String password) {
-        canvas.setStatus("Fetching /crc from " + config.httpBaseUri() + " then connecting to " + config.gameEndpoint());
-        Thread loginThread = new Thread(() -> {
+    private String sessionStatus() {
+        GameSession s = session;
+        return s != null ? s.status() : "";
+    }
+
+    private void startLogin(String username, String password) {
+        GameSession old = session;
+        if (old != null) { old.close(); session = null; }
+
+        Thread t = new Thread(() -> {
             try {
-                LoginResult result = new LoginClient(config).login(username, password, false);
-                canvas.setStatus(result.toString());
+                GameSession s = new LoginClient(config).login(username, password, false);
+                session = s;
+                canvas.enterGame();
+                s.start();
             } catch (Exception ex) {
-                canvas.setStatus("Login failed: " + ex.getMessage());
+                // Show error on the title screen briefly, then let them retry
+                canvas.showLoginError(ex.getMessage());
                 ex.printStackTrace();
             }
-        }, "login-test");
-        loginThread.setDaemon(true);
-        loginThread.start();
+        }, "login-thread");
+        t.setDaemon(true);
+        t.start();
     }
 }

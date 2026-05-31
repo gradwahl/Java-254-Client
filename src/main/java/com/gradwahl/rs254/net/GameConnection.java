@@ -17,11 +17,13 @@ public final class GameConnection implements AutoCloseable {
         this.out = socket.getOutputStream();
     }
 
-    public static GameConnection openTcp(String host, int port) throws IOException {
+    public static GameConnection open(String host, int port) throws IOException {
+        System.out.println("[net] Connecting to game TCP " + host + ":" + port + " ...");
         Socket socket = new Socket();
-        socket.setTcpNoDelay(true);
         socket.connect(new InetSocketAddress(host, port), 10_000);
+        socket.setTcpNoDelay(true);
         socket.setSoTimeout(20_000);
+        System.out.println("[net] TCP connected");
         return new GameConnection(socket);
     }
 
@@ -31,24 +33,24 @@ public final class GameConnection implements AutoCloseable {
     }
 
     public int read() throws IOException {
-        int value = in.read();
-        if (value < 0) throw new IOException("Connection closed by server");
-        return value;
+        int b = in.read();
+        if (b == -1) throw new IOException("Connection closed");
+        return b;
     }
 
     public byte[] readBytes(int len) throws IOException {
         byte[] out = new byte[len];
         int off = 0;
         while (off < len) {
-            int read = in.read(out, off, len - off);
-            if (read < 0) throw new IOException("Connection closed by server while reading " + len + " bytes");
-            off += read;
+            int n = in.read(out, off, len - off);
+            if (n == -1) throw new IOException("Connection closed");
+            off += n;
         }
         return out;
     }
 
     @Override
-    public void close() throws IOException {
-        socket.close();
+    public void close() {
+        try { socket.close(); } catch (IOException ignored) {}
     }
 }

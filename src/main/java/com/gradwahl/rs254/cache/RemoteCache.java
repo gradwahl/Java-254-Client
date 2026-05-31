@@ -4,6 +4,7 @@ import com.gradwahl.rs254.ClientConfig;
 import com.gradwahl.rs254.io.PacketBuffer;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -17,11 +18,33 @@ public final class RemoteCache {
         this.config = config;
     }
 
+    private static final java.util.Random RNG = new java.util.Random();
+
     public int[] fetchCrcs() throws IOException, InterruptedException {
-        byte[] data = fetch("/crc");
-        if (data.length < 36) {
-            throw new IOException("/crc returned " + data.length + " bytes, expected 36");
+        try {
+            int suffix = (int) (RNG.nextDouble() * 9.9999999E7);
+            String path = "/crc" + suffix;
+            System.out.println("Trying " + config.httpBaseUri() + path);
+            byte[] data = fetch(path);
+            if (data.length < 36) {
+                throw new IOException("/crc returned " + data.length + " bytes, expected 36");
+            }
+            System.out.println("Loaded CRCs from HTTP.");
+            return decodeCrcs(data);
+        } catch (Exception httpError) {
+            System.out.println("HTTP /crc failed: " + httpError.getClass().getSimpleName() + ": " + httpError.getMessage());
+            DiskCache disk = new DiskCache(config.cacheDir());
+            if (!disk.exists()) {
+                if (httpError instanceof IOException e) throw e;
+                if (httpError instanceof InterruptedException e) throw e;
+                throw new IOException("HTTP /crc failed and no local cache exists at " + config.cacheDir(), httpError);
+            }
+            System.out.println("Using local cache CRCs from " + config.cacheDir());
+            return disk.crcsForIndex0();
         }
+    }
+
+    private static int[] decodeCrcs(byte[] data) {
         PacketBuffer buf = new PacketBuffer(data);
         int[] crcs = new int[9];
         for (int i = 0; i < crcs.length; i++) crcs[i] = buf.g4();
