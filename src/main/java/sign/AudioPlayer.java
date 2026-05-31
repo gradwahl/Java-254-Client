@@ -4,6 +4,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import javax.sound.midi.MetaEventListener;
 import javax.sound.midi.MidiMessage;
 import javax.sound.midi.MidiSystem;
 import javax.sound.midi.Receiver;
@@ -70,6 +71,7 @@ final class AudioPlayer {
 			sequencer.setSequence(MidiSystem.getSequence(new File(path)));
 			sequencer.setTempoFactor(1.0F);
 			midiPaused = false;
+			sequencer.addMetaEventListener(createLoopVolumeListener());
 			sequencer.start();
 		} catch (Exception ex) {
 			System.err.println("Unable to play midi audio: " + ex.getMessage());
@@ -113,6 +115,18 @@ final class AudioPlayer {
 		}
 	}
 
+	private static MetaEventListener createLoopVolumeListener() {
+		return meta -> {
+			if (meta.getType() == 47) { // end of track
+				synchronized (AudioPlayer.class) {
+					if (midiReceiver != null) {
+						midiReceiver.reapplyVolume();
+					}
+				}
+			}
+		};
+	}
+
 	private static void setWaveVolume(Clip clip, int volume) {
 		if (!clip.isControlSupported(FloatControl.Type.MASTER_GAIN)) {
 			return;
@@ -145,17 +159,25 @@ final class AudioPlayer {
 			for (int channel = 0; channel < this.channelVolumes.length; channel++) {
 				this.channelVolumes[channel] = 127;
 			}
+			reapplyVolume();
+			disableReverb();
 		}
 
 		@Override
 		public void send(MidiMessage message, long timeStamp) {
 			if (message instanceof ShortMessage) {
 				ShortMessage shortMessage = (ShortMessage) message;
-				if (shortMessage.getCommand() == ShortMessage.CONTROL_CHANGE && shortMessage.getData1() == 7) {
-					int channel = shortMessage.getChannel();
-					this.channelVolumes[channel] = shortMessage.getData2();
-					this.sendChannelVolume(channel, timeStamp);
-					return;
+				int data1 = shortMessage.getData1();
+				if (shortMessage.getCommand() == ShortMessage.CONTROL_CHANGE) {
+					if (data1 == 7) {
+						int channel = shortMessage.getChannel();
+						this.channelVolumes[channel] = shortMessage.getData2();
+						this.sendChannelVolume(channel, timeStamp);
+						return;
+					}
+					if (data1 == 91 || data1 == 93) {
+						return;
+					}
 				}
 			}
 			this.receiver.send(message, timeStamp);
@@ -173,8 +195,25 @@ final class AudioPlayer {
 			}
 		}
 
+		private void reapplyVolume() {
+			for (int channel = 0; channel < this.channelVolumes.length; channel++) {
+				this.sendChannelVolume(channel, -1L);
+			}
+		}
+
+		private void disableReverb() {
+			for (int channel = 0; channel < 16; channel++) {
+				try {
+					this.receiver.send(new ShortMessage(ShortMessage.CONTROL_CHANGE, channel, 91, 0), -1L);
+					this.receiver.send(new ShortMessage(ShortMessage.CONTROL_CHANGE, channel, 93, 0), -1L);
+				} catch (Exception ex) {
+					System.err.println("Unable to disable reverb: " + ex.getMessage());
+				}
+			}
+		}
+
 		private void sendChannelVolume(int channel, long timeStamp) {
-			int scaledVolume = (int) Math.round(this.channelVolumes[channel] * Math.pow(10.0D, this.volume / 2000.0D));
+			int scaledVolume = (int) Math.round(this.channelVolumes[channel] * Math.pow(10.0D, this.volume / 1000.0D));
 			try {
 				this.receiver.send(new ShortMessage(ShortMessage.CONTROL_CHANGE, channel, 7, scaledVolume), timeStamp);
 			} catch (Exception ex) {

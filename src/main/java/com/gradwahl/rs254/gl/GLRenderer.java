@@ -8,10 +8,16 @@ import jagex2.graphics.TriangleRenderer;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.system.MemoryUtil;
 
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
 import static org.lwjgl.glfw.GLFW.*;
@@ -38,15 +44,66 @@ public final class GLRenderer implements TriangleRenderer {
     private static final int FLOATS_PER_VERT = 10;
     private static final int MAX_TRIS        = 32_768;
     private static final int MAX_VERTS       = MAX_TRIS * 3;
+    private static final int SIDEBAR_PANEL_W = 180;
+    private static final int SIDEBAR_RAIL_W  = 28;
+    private static final int SIDEBAR_ROW_H   = 34;
+    private static final int SIDEBAR_TABS    = 6;
+
+    private static final java.awt.Font INTER_FONT;
+    private static final java.awt.Font INTER_MEDIUM;
+    static {
+        java.awt.Font reg;
+        try (InputStream is = GLRenderer.class.getResourceAsStream("/Inter-Regular.ttf")) {
+            reg = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, is);
+        } catch (Exception e) {
+            reg = new java.awt.Font("SansSerif", java.awt.Font.PLAIN, 12);
+        }
+        INTER_FONT = reg;
+
+        java.awt.Font med;
+        try (InputStream is = GLRenderer.class.getResourceAsStream("/Inter-Medium.ttf")) {
+            med = java.awt.Font.createFont(java.awt.Font.TRUETYPE_FONT, is);
+        } catch (Exception e) {
+            med = reg;
+        }
+        INTER_MEDIUM = med;
+    }
+
+    // Short skill names matching Client's statXP[] order
+    private static final String[] SKILL_SHORT = {
+        "ATK", "DEF", "STR", "HP",  "RNG", "PRA", "MAG",
+        "COK", "WC",  "FLT", "FSH", "FM",  "CRA", "SMI",
+        "MIN", "HER", "AGI", "THI", "SLA", "RC",  "TOT"
+    };
+
+    // Hiscores skill selector labels — index 0 = Overall, 1-19 = API skill IDs
+    private static final String[] HSCORE_SKILL_LABEL = {
+        "Overall",   "Attack",   "Defence",    "Strength", "Hitpoints",
+        "Ranged",    "Prayer",   "Magic",      "Cooking",  "Woodcutting",
+        "Fletching", "Fishing",  "Firemaking", "Crafting", "Smithing",
+        "Mining",    "Herblore", "Agility",    "Thieving", "Runecrafting"
+    };
+
+    // LostHQ guide categories
+    private static final String[] LOSTHQ_ITEMS = {
+        "QUEST GUIDES",
+        "NPC DATABASE",
+        "ITEM DATABASE",
+        "SPECIAL GUIDES",
+        "TREASURE TRAILS",
+        "SKILL GUIDES"
+    };
 
     private static final String UI_VERT_SRC = """
             #version 330 core
             layout(location=0) in vec2 aPos;
             layout(location=1) in vec2 aUV;
+            uniform float uUMin;
+            uniform float uUMax;
             out vec2 vUV;
             void main() {
                 gl_Position = vec4(aPos, 0.0, 1.0);
-                vUV = aUV;
+                vUV = vec2(uUMin + aUV.x * (uUMax - uUMin), aUV.y);
             }
             """;
 
@@ -122,6 +179,7 @@ public final class GLRenderer implements TriangleRenderer {
 
     private final int screenW;
     private final int screenH;
+    private final int maxUiW;
     private int       windowW;
     private int       windowH;
 
@@ -137,8 +195,44 @@ public final class GLRenderer implements TriangleRenderer {
     private int         currentTexId = -1;         // texture bound for current batch
 
     // UI overlay pass
-    private int     uiProg, uiQuadVao, uiQuadVbo, uiTex, uiTexLoc;
+    private int     uiProg, uiQuadVao, uiQuadVbo, uiTex, uiTexLoc, uiUMinLoc, uiUMaxLoc;
     private IntBuffer uiDirectBuf;  // direct (off-heap) buffer for glTexSubImage2D
+
+    // Native-resolution sidebar — rendered via Java2D at physical screen pixels
+    private java.awt.image.BufferedImage sidebarNativeBuf;
+    private java.nio.IntBuffer           sidebarNativeDirect;
+    private int                          sidebarNativeTex;
+    private int                          sidebarNativeW, sidebarNativeH;
+    private java.awt.Graphics2D          sg;  // set during drawSidebar(), null otherwise
+
+    private static final java.awt.Font UI_FONT_BODY = INTER_MEDIUM.deriveFont(9.5f);
+    private static final java.awt.Font UI_FONT_HEAD = INTER_FONT.deriveFont(12f);
+    private static final java.awt.Font UI_FONT_TINY = INTER_MEDIUM.deriveFont(7f);
+
+    // RuneLite-style client sidebar
+    private boolean sidebarOpen;
+    private int     sidebarTab;
+    private boolean sidebarGpuEnabled   = true;
+    private boolean sidebarFpsEnabled   = true;
+    private boolean sidebarRoofsEnabled = true;
+    private boolean settingsFullscreen  = false;
+    private boolean settingsShiftClick  = false;
+    private boolean settingsDiscordRp   = false;
+
+    // XP session tracking — updated by Client when XP packets arrive
+    public static final long[] xpSessionGains = new long[25];
+    // When true, Client renders floating XP drops on the viewport
+    public static boolean xpScreenEnabled = false;
+    // Player info for Hiscores panel (populated by Client)
+    public static String playerName      = "";
+    public static int    playerTotalLevel = 0;
+
+    // Hiscores panel state
+    private int             hiscoresSkill   = 0;   // 0=overall, 1-19=API skill ID
+    private volatile String[] hiscoresNames  = new String[0];
+    private volatile int[]    hiscoresLevels = new int[0];
+    private long            hiscoresFetchAt = 0;
+    private volatile boolean hiscoresFetching = false;
 
     // Only intercept Pix3D calls when rendering to the main game viewport, not icon buffers.
     public static int[] viewportPixels = null;
@@ -153,6 +247,8 @@ public final class GLRenderer implements TriangleRenderer {
     private boolean   middleMouseDragging;
     private int       middleMouseX;
     private int       middleMouseY;
+    private int       cursorX;
+    private int       cursorY;
 
     // Debug metrics overlay
     private boolean statsOverlayVisible;
@@ -169,7 +265,8 @@ public final class GLRenderer implements TriangleRenderer {
     public GLRenderer(int screenW, int screenH) {
         this.screenW = screenW;
         this.screenH = screenH;
-        this.windowW = screenW;
+        this.maxUiW = screenW + SIDEBAR_PANEL_W + SIDEBAR_RAIL_W;
+        this.windowW = screenW + SIDEBAR_RAIL_W;
         this.windowH = screenH;
     }
 
@@ -190,7 +287,7 @@ public final class GLRenderer implements TriangleRenderer {
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_VISIBLE,   GLFW_FALSE);
 
-        window = glfwCreateWindow(screenW, screenH, "RS254 - OpenGL", NULL, NULL);
+        window = glfwCreateWindow(windowW, screenH, "RS254 - OpenGL", NULL, NULL);
         if (window == NULL) throw new RuntimeException("GLFW window creation failed");
 
         glfwMakeContextCurrent(window);
@@ -270,9 +367,11 @@ public final class GLRenderer implements TriangleRenderer {
         glDeleteVertexArrays(uiQuadVao);
         glDeleteProgram(uiProg);
         glDeleteTextures(uiTex);
+        if (sidebarNativeTex != 0) glDeleteTextures(sidebarNativeTex);
         for (int t : gpuTex) if (t != 0) glDeleteTextures(t);
         MemoryUtil.memFree(buf);
-        if (uiDirectBuf != null) MemoryUtil.memFree(uiDirectBuf);
+        if (uiDirectBuf      != null) MemoryUtil.memFree(uiDirectBuf);
+        if (sidebarNativeDirect != null) MemoryUtil.memFree(sidebarNativeDirect);
         glfwFreeCallbacks(window);
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -424,11 +523,11 @@ public final class GLRenderer implements TriangleRenderer {
 
     private void setupUIPass() {
         // Allocate the CPU-side UI buffer that PixMap.draw() writes into.
-        PixMap.uiBuffer = new int[screenW * screenH];
-        PixMap.uiWidth  = screenW;
+        PixMap.uiBuffer = new int[maxUiW * screenH];
+        PixMap.uiWidth  = maxUiW;
         PixMap.uiHeight = screenH;
         // Direct (off-heap) copy buffer for glTexSubImage2D — LWJGL requires direct buffers.
-        uiDirectBuf = MemoryUtil.memAllocInt(screenW * screenH);
+        uiDirectBuf = MemoryUtil.memAllocInt(maxUiW * screenH);
 
         // Fullscreen quad: two triangles covering NDC [-1,1].
         // UV Y is flipped because RS has Y=0 at top, OpenGL NDC has Y=1 at top.
@@ -451,34 +550,440 @@ public final class GLRenderer implements TriangleRenderer {
         glEnableVertexAttribArray(1);
 
         uiProg = buildProgram(UI_VERT_SRC, UI_FRAG_SRC);
-        uiTexLoc = glGetUniformLocation(uiProg, "uUI");
+        uiTexLoc  = glGetUniformLocation(uiProg, "uUI");
+        uiUMinLoc = glGetUniformLocation(uiProg, "uUMin");
+        uiUMaxLoc = glGetUniformLocation(uiProg, "uUMax");
 
         // Create the 2D overlay texture (BGRA so IntBuffer maps straight).
         uiTex = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, uiTex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, screenW, screenH, 0,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, maxUiW, screenH, 0,
                      GL_BGRA, GL_UNSIGNED_BYTE, (ByteBuffer) null);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+        sidebarNativeTex = glGenTextures();
+        glBindTexture(GL_TEXTURE_2D, sidebarNativeTex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     }
 
     private void drawUIOverlay() {
         if (PixMap.uiBuffer == null) return;
-        // Upload the current frame's UI pixels.
+
+        // Upload game UI pixels. drawSidebar() no longer touches uiBuffer, so no backup needed.
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, uiTex);
         uiDirectBuf.clear();
-        uiDirectBuf.put(PixMap.uiBuffer, 0, screenW * screenH);
+        uiDirectBuf.put(PixMap.uiBuffer, 0, maxUiW * screenH);
         uiDirectBuf.flip();
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, screenW, screenH,
-                        GL_BGRA, GL_UNSIGNED_BYTE,
-                        uiDirectBuf);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, maxUiW, screenH,
+                        GL_BGRA, GL_UNSIGNED_BYTE, uiDirectBuf);
+
         glUseProgram(uiProg);
         glUniform1i(uiTexLoc, 0);
         glBindVertexArray(uiQuadVao);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-        // Restore the 3D shader for the next frame.
+
+        int[] fw = new int[1], fh = new int[1];
+        glfwGetFramebufferSize(window, fw, fh);
+        int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+
+        if (sidebarInsideWindow()) {
+            double scale  = Math.min((double) fw[0] / (screenW + sidebarLogW),
+                                     (double) fh[0] / screenH);
+            int gameW    = Math.max(1, (int) Math.round(screenW    * scale));
+            int gameH    = Math.max(1, (int) Math.round(screenH    * scale));
+            int sidebarW = Math.max(1, (int) Math.round(sidebarLogW * scale));
+            int gameX    = sidebarOpen ? 0 : (fw[0] - gameW - sidebarW) / 2;
+            int vertOff  = (fh[0] - gameH) / 2;
+
+            // Pass 1: game UI
+            glUniform1f(uiUMinLoc, 0f);
+            glUniform1f(uiUMaxLoc, (float) screenW / maxUiW);
+            glViewport(gameX, vertOff, gameW, gameH);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            // Pass 2: native-resolution sidebar
+            drawSidebarNative(fw[0] - sidebarW, vertOff, sidebarW, gameH, scale);
+        } else {
+            // Windowed 1:1 mode — compute actual DPI scale from framebuffer vs logical size
+            double scale  = (fw[0] > 0) ? (double) fw[0] / (screenW + sidebarLogW) : 1.0;
+            int gameW    = Math.max(1, (int) Math.round(screenW    * scale));
+            int gameH    = Math.max(1, (int) Math.round(screenH    * scale));
+            int sidebarW = Math.max(1, (int) Math.round(sidebarLogW * scale));
+
+            glUniform1f(uiUMinLoc, 0f);
+            glUniform1f(uiUMaxLoc, (float) screenW / maxUiW);
+            glViewport(0, 0, gameW, gameH);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+
+            drawSidebarNative(gameW, 0, sidebarW, gameH, scale);
+        }
+
         glUseProgram(prog);
+        updateOutputViewport();
+    }
+
+    private void drawSidebarNative(int physX, int physY, int physW, int physH, double scale) {
+        // Reallocate Java2D buffer and GL texture storage whenever the physical size changes.
+        if (physW != sidebarNativeW || physH != sidebarNativeH) {
+            if (sidebarNativeBuf != null) sidebarNativeBuf.flush();
+            if (sidebarNativeDirect != null) MemoryUtil.memFree(sidebarNativeDirect);
+            sidebarNativeBuf    = new java.awt.image.BufferedImage(physW, physH,
+                    java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            sidebarNativeDirect = MemoryUtil.memAllocInt(physW * physH);
+            sidebarNativeW = physW; sidebarNativeH = physH;
+            glBindTexture(GL_TEXTURE_2D, sidebarNativeTex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, physW, physH, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        }
+
+        // Render sidebar into native buffer at physical resolution via Java2D.
+        sg = sidebarNativeBuf.createGraphics();
+        sg.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING,
+                            java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        sg.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
+                            java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+        sg.setRenderingHint(java.awt.RenderingHints.KEY_FRACTIONALMETRICS,
+                            java.awt.RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+        sg.setBackground(new java.awt.Color(0, 0, 0, 0));
+        sg.clearRect(0, 0, physW, physH);
+        // Map logical sidebar coordinates (x origin = screenW) to physical pixels.
+        sg.scale(scale, scale);
+        sg.translate(-screenW, 0);
+        drawSidebar();
+        sg.dispose();
+        sg = null;
+
+        // Upload Java2D pixels (TYPE_INT_ARGB = BGRA in little-endian memory) to GL.
+        int[] pixels = ((java.awt.image.DataBufferInt)
+                sidebarNativeBuf.getRaster().getDataBuffer()).getData();
+        sidebarNativeDirect.clear();
+        sidebarNativeDirect.put(pixels);
+        sidebarNativeDirect.flip();
+        glBindTexture(GL_TEXTURE_2D, sidebarNativeTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, physW, physH,
+                        GL_BGRA, GL_UNSIGNED_BYTE, sidebarNativeDirect);
+
+        // Draw native sidebar texture in its physical viewport — exactly 1:1 pixels.
+        glUniform1f(uiUMinLoc, 0f);
+        glUniform1f(uiUMaxLoc, 1f);
+        glViewport(physX, physY, physW, physH);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // Restore the game UI texture for any subsequent passes.
+        glBindTexture(GL_TEXTURE_2D, uiTex);
+    }
+
+    private void drawSidebar() {
+        int railX  = sidebarRailX();
+        int panelX = sidebarPanelX();
+        if (sidebarOpen) {
+            fillUiRect(panelX, 0, SIDEBAR_PANEL_W, screenH, 0xFF262626);
+            fillUiRect(panelX + SIDEBAR_PANEL_W - 1, 0, 1, screenH, 0xFF363636);
+            drawUiText(sidebarTitle(), panelX + 12, 17, 2, 0xFFDCDCDC);
+            drawUiText("X", panelX + SIDEBAR_PANEL_W - 18, 17, 2, 0xFF999999);
+            fillUiRect(panelX, 42, SIDEBAR_PANEL_W, 1, 0xFF363636);
+            drawSidebarPanel(panelX);
+        }
+
+        fillUiRect(railX, 0, SIDEBAR_RAIL_W, screenH, 0xFF1B1B1B);
+        fillUiRect(railX, 0, 1, screenH, 0xFF363636);
+        for (int index = 0; index < SIDEBAR_TABS; index++) {
+            int y      = index * SIDEBAR_ROW_H;
+            boolean active = sidebarOpen && sidebarTab == index;
+            if (active) {
+                fillUiRect(railX + 1, y, SIDEBAR_RAIL_W - 1, SIDEBAR_ROW_H, 0xFF3F3523);
+                fillUiRect(railX + 1, y, 3, SIDEBAR_ROW_H, 0xFFE89E14);
+            }
+            // 8×8 icon drawn at scale 2 = 16×16 px, centred in 28×34 cell
+            drawIconScaled(index, railX + 6, y + 9, 2, active ? 0xFFE89E14 : 0xFFDCDCDC);
+        }
+    }
+
+    private void drawSidebarPanel(int x) {
+        switch (sidebarTab) {
+            case 0 -> drawHiscoresPanel(x);
+            case 1 -> drawXpScreenPanel(x);
+            case 2 -> drawXpTrackerPanel(x);
+            case 3 -> drawWorldMapPanel(x);
+            case 4 -> drawLostHqPanel(x);
+            case 5 -> drawSettingsPanel(x);
+        }
+    }
+
+    private String sidebarTitle() {
+        return switch (sidebarTab) {
+            case 0 -> "HISCORES";
+            case 1 -> "XP SCREEN";
+            case 2 -> "XP TRACKER";
+            case 3 -> "WORLD MAP";
+            case 4 -> "LOSTHQ";
+            default -> "SETTINGS";
+        };
+    }
+
+    private void drawHiscoresPanel(int x) {
+        // Auto-fetch when panel opens or data is stale (30s)
+        long now = System.currentTimeMillis();
+        if (!hiscoresFetching && (hiscoresNames.length == 0 || now - hiscoresFetchAt > 30_000L)) {
+            fetchHiscores(hiscoresSkill);
+        }
+
+        // Skill selector buttons — 2 per row, 10 rows, full skill names at tiny size
+        for (int i = 0; i < HSCORE_SKILL_LABEL.length; i++) {
+            int col = i % 2;
+            int row = i / 2;
+            int bx  = x + 10 + col * 82;
+            int by  = 52 + row * 13;
+            boolean sel = (i == hiscoresSkill);
+            fillUiRect(bx, by, 78, 11, sel ? 0xFF3F3523 : 0xFF2A2A2A);
+            if (sel) fillUiRect(bx, by, 78, 1, 0xFFE89E14);
+            drawUiText(HSCORE_SKILL_LABEL[i], bx + 4, by + 2, 0, sel ? 0xFFE89E14 : 0xFF999999);
+        }
+
+        int afterButtons = 52 + 10 * 13 + 3;  // y just below last button row
+        fillUiRect(x + 10, afterButtons, SIDEBAR_PANEL_W - 20, 1, 0xFF363636);
+
+        // Column headers
+        int headerY = afterButtons + 5;
+        drawUiText("RK",   x + 10,  headerY, 1, 0xFF666666);
+        drawUiText("NAME", x + 28,  headerY, 1, 0xFF666666);
+        drawUiText("LVL",  x + 140, headerY, 1, 0xFF666666);
+        fillUiRect(x + 10, headerY + 9, SIDEBAR_PANEL_W - 20, 1, 0xFF363636);
+
+        // Leaderboard rows
+        String[] names  = hiscoresNames;
+        int[]    levels = hiscoresLevels;
+        int rowY = headerY + 13;
+        if (names.length == 0) {
+            String msg = hiscoresFetching ? "LOADING..." : "NO DATA";
+            drawUiText(msg, x + 10, rowY, 1, 0xFF666666);
+        } else {
+            int maxRows = (screenH - rowY) / 12;
+            for (int i = 0; i < names.length && i < maxRows; i++) {
+                int col = (i == 0) ? 0xFFFFD700 : 0xFFDCDCDC;
+                drawUiText(String.valueOf(i + 1), x + 10, rowY, 1, col);
+                String name = names[i].toUpperCase();
+                if (name.length() > 14) name = name.substring(0, 14);
+                drawUiText(name, x + 28, rowY, 1, col);
+                drawUiText(String.valueOf(levels[i]), x + 140, rowY, 1, col);
+                rowY += 12;
+            }
+        }
+    }
+
+    private void drawXpScreenPanel(int x) {
+        drawUiText("SHOW XP GAINS", x + 16, 56, 1, 0xFFE89E14);
+        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        drawUiText("DISPLAYS FLOATING XP", x + 16, 86, 1, 0xFF999999);
+        drawUiText("TEXT ON SCREEN WHEN", x + 16, 100, 1, 0xFF999999);
+        drawUiText("EXPERIENCE IS GAINED.", x + 16, 114, 1, 0xFF999999);
+        fillUiRect(x + 16, 130, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        drawToggleRow(x, 140, "XP ON SCREEN", xpScreenEnabled);
+    }
+
+    private void drawXpTrackerPanel(int x) {
+        // Reset button (top-right of panel)
+        fillUiRect(x + SIDEBAR_PANEL_W - 58, 52, 46, 16, 0xFF3A3A3A);
+        fillUiRect(x + SIDEBAR_PANEL_W - 58, 52, 46, 1, 0xFF555555);
+        fillUiRect(x + SIDEBAR_PANEL_W - 58, 67, 46, 1, 0xFF555555);
+        drawUiText("RESET", x + SIDEBAR_PANEL_W - 50, 57, 1, 0xFFDCDCDC);
+        // Column headers
+        drawUiText("SKILL", x + 16, 57, 1, 0xFF999999);
+        drawUiText("XP GAINED", x + 70, 57, 1, 0xFF999999);
+        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        // Rows
+        boolean hasXp = false;
+        for (long v : xpSessionGains) if (v > 0) { hasXp = true; break; }
+        if (!hasXp) {
+            drawUiText("NO XP GAINED", x + 16, 90,  1, 0xFF999999);
+            drawUiText("THIS SESSION.",  x + 16, 106, 1, 0xFF999999);
+        } else {
+            int rowY = 82;
+            for (int i = 0; i < SKILL_SHORT.length && rowY < screenH - 14; i++) {
+                if (xpSessionGains[i] > 0) {
+                    drawUiText(SKILL_SHORT[i], x + 16, rowY, 1, 0xFFDCDCDC);
+                    drawUiText("+" + xpSessionGains[i], x + 70, rowY, 1, 0xFF80FF80);
+                    rowY += 14;
+                }
+            }
+        }
+    }
+
+    private void drawWorldMapPanel(int x) {
+        drawUiText("WORLD MAP", x + 16, 56, 1, 0xFFE89E14);
+        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        drawUiText("CONNECT TO A WORLD", x + 16, 90, 1, 0xFF999999);
+        drawUiText("TO TRACK YOUR", x + 16, 106, 1, 0xFF999999);
+        drawUiText("LOCATION ON THE", x + 16, 122, 1, 0xFF999999);
+        drawUiText("WORLD MAP.", x + 16, 138, 1, 0xFF999999);
+    }
+
+    private void drawLostHqPanel(int x) {
+        drawUiText("LOSTHQ TOOLS", x + 16, 56, 1, 0xFFE89E14);
+        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        for (int i = 0; i < LOSTHQ_ITEMS.length; i++) {
+            int itemY = 82 + i * 24;
+            fillUiRect(x + 12, itemY, SIDEBAR_PANEL_W - 24, 18, 0xFF1F1F1F);
+            fillUiRect(x + 12, itemY, SIDEBAR_PANEL_W - 24, 1, 0xFF363636);
+            drawUiText(LOSTHQ_ITEMS[i], x + 20, itemY + 6, 1, 0xFFDCDCDC);
+        }
+    }
+
+    private void drawSettingsPanel(int x) {
+        drawUiText("CLIENT SETTINGS", x + 16, 56, 1, 0xFFE89E14);
+        drawToggleRow(x, 72,  "GPU RENDERING",   sidebarGpuEnabled);
+        drawToggleRow(x, 116, "SHOW FPS",         sidebarFpsEnabled);
+        drawToggleRow(x, 160, "SHOW ROOFS",       sidebarRoofsEnabled);
+        drawToggleRow(x, 204, "FULLSCREEN",        settingsFullscreen);
+        drawToggleRow(x, 248, "SHIFT CLICK",       settingsShiftClick);
+        drawToggleRow(x, 292, "DISCORD RP",        settingsDiscordRp);
+    }
+
+    private void drawPluginRow(int x, int y, String name, String description, boolean enabled) {
+        drawUiText(name, x + 16, y, 2, 0xFFDCDCDC);
+        drawUiText(description, x + 16, y + 20, 1, 0xFF999999);
+        drawToggle(x + SIDEBAR_PANEL_W - 48, y + 2, enabled);
+    }
+
+    private void fetchHiscores(int skill) {
+        if (hiscoresFetching) return;
+        hiscoresFetching = true;
+        hiscoresFetchAt  = System.currentTimeMillis();
+        String urlStr = "http://localhost:3000/api/hiscores?page=0&skill="
+                + (skill == 0 ? "overall" : String.valueOf(skill));
+        Thread t = new Thread(() -> {
+            try {
+                HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                conn.setConnectTimeout(3000);
+                conn.setReadTimeout(5000);
+                try (InputStream in = conn.getInputStream()) {
+                    String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                    parseHiscores(json);
+                }
+            } catch (Exception ignored) {
+            } finally {
+                hiscoresFetching = false;
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void parseHiscores(String json) {
+        List<String>  names  = new ArrayList<>();
+        List<Integer> levels = new ArrayList<>();
+        int pos = 0;
+        while (true) {
+            int objStart = json.indexOf('{', pos);
+            if (objStart < 0) break;
+            int objEnd = json.indexOf('}', objStart);
+            if (objEnd < 0) break;
+            String obj   = json.substring(objStart, objEnd + 1);
+            String name  = jsonString(obj, "username");
+            int    level = jsonInt(obj, "level");
+            if (name != null && level >= 0) {
+                names.add(name);
+                levels.add(level);
+            }
+            pos = objEnd + 1;
+        }
+        hiscoresNames  = names.toArray(new String[0]);
+        hiscoresLevels = levels.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private static String jsonString(String obj, String key) {
+        String tag = "\"" + key + "\":\"";
+        int i = obj.indexOf(tag);
+        if (i < 0) return null;
+        i += tag.length();
+        int end = obj.indexOf('"', i);
+        return end < 0 ? null : obj.substring(i, end);
+    }
+
+    private static int jsonInt(String obj, String key) {
+        String tag = "\"" + key + "\":";
+        int i = obj.indexOf(tag);
+        if (i < 0) return -1;
+        i += tag.length();
+        int end = i;
+        while (end < obj.length() && (Character.isDigit(obj.charAt(end)) || obj.charAt(end) == '-')) end++;
+        try { return Integer.parseInt(obj.substring(i, end)); } catch (NumberFormatException e) { return -1; }
+    }
+
+    private void drawToggleRow(int x, int y, String text, boolean enabled) {
+        drawUiText(text, x + 16, y + 16, 1, 0xFFDCDCDC);
+        drawToggle(x + SIDEBAR_PANEL_W - 48, y + 9, enabled);
+        fillUiRect(x + 16, y + 42, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+    }
+
+    private void drawMetric(int x, int y, String name, String value) {
+        drawUiText(name, x + 16, y, 1, 0xFF999999);
+        drawUiText(value, x + 98, y, 1, 0xFFDCDCDC);
+    }
+
+    private void drawToggle(int x, int y, boolean enabled) {
+        fillUiRect(x, y, 32, 16, enabled ? 0xFFE09107 : 0xFF505050);
+        fillUiRect(enabled ? x + 18 : x + 2, y + 2, 12, 12, enabled ? 0xFFFFC143 : 0xFFA5A5A5);
+    }
+
+    /**
+     * Draw one of the 6 sidebar rail icons (8×8 bitmask, bit 7 = leftmost column).
+     * At scale 2 this produces a 16×16 pixel icon.
+     *
+     * Icon legend (tab index):
+     *   0 = Crown      → Hiscores
+     *   1 = Eye        → XP on-screen toggle
+     *   2 = Bar chart  → XP Tracker
+     *   3 = Globe      → World Map
+     *   4 = Grid/table → LostHQ Tools
+     *   5 = Gear       → Settings
+     */
+    private static int[] iconBits(int id) {
+        return switch (id) {
+            case 0 -> new int[]{0x81, 0xA9, 0xFF, 0x7E, 0x7E, 0x3C, 0x7E, 0xFF}; // crown
+            case 1 -> new int[]{0x00, 0x3C, 0x7E, 0xDB, 0xFF, 0x7E, 0x3C, 0x00}; // eye
+            case 2 -> new int[]{0x00, 0x03, 0x03, 0x0F, 0x0F, 0x6F, 0x6F, 0x6F}; // rising bars
+            case 3 -> new int[]{0x3C, 0x42, 0xBD, 0xFF, 0xBD, 0x42, 0x3C, 0x00}; // globe
+            case 4 -> new int[]{0xFF, 0x92, 0x92, 0xFF, 0x92, 0x92, 0xFF, 0x00}; // grid/table
+            case 5 -> new int[]{0x3C, 0x7E, 0xE7, 0x42, 0x42, 0xE7, 0x7E, 0x3C}; // gear
+            default -> new int[8];
+        };
+    }
+
+    private void drawIconScaled(int id, int x, int y, int scale, int color) {
+        int[] bits = iconBits(id);
+        for (int row = 0; row < bits.length; row++) {
+            for (int col = 0; col < 8; col++) {
+                if ((bits[row] & (1 << (7 - col))) != 0) {
+                    fillUiRect(x + col * scale, y + row * scale, scale, scale, color);
+                }
+            }
+        }
+    }
+
+    /** Reset all per-session XP counters. Called from the XP Tracker reset button. */
+    public static void resetXpSession() {
+        java.util.Arrays.fill(xpSessionGains, 0L);
+    }
+
+    private void fillUiRect(int x, int y, int width, int height, int argb) {
+        int a = (argb >> 24) & 0xFF, r = (argb >> 16) & 0xFF,
+            g = (argb >> 8)  & 0xFF, b =  argb        & 0xFF;
+        sg.setColor(new java.awt.Color(r, g, b, a));
+        sg.fillRect(x, y, width, height);
+    }
+
+    private void drawUiText(String text, int x, int y, int scale, int argb) {
+        if (text == null || text.isEmpty()) return;
+        java.awt.Font font = (scale >= 2) ? UI_FONT_HEAD : (scale == 0) ? UI_FONT_TINY : UI_FONT_BODY;
+        sg.setFont(font);
+        java.awt.FontMetrics fm = sg.getFontMetrics(font);
+        int a = (argb >> 24) & 0xFF, r = (argb >> 16) & 0xFF,
+            g = (argb >> 8)  & 0xFF, b =  argb        & 0xFF;
+        sg.setColor(new java.awt.Color(r, g, b, a));
+        sg.drawString(text, x, y + fm.getAscent());
     }
 
     private void updateMetrics() {
@@ -505,7 +1010,7 @@ public final class GLRenderer implements TriangleRenderer {
         for (String line : lines) {
             maxChars = Math.max(maxChars, line.length());
         }
-        int x = vpDrawX + vpW - maxChars * 4 * 2 - 7;
+        int x = vpDrawX + vpW - maxChars * 6 * 2 - 7;
         int y = vpDrawY + 4;
         for (String line : lines) {
             drawText(line, x + 1, y + 1, 2, 0x000000);
@@ -519,15 +1024,15 @@ public final class GLRenderer implements TriangleRenderer {
         int cursor = x;
         for (int i = 0; i < text.length(); i++) {
             drawGlyph(text.charAt(i), cursor, y, scale, rgb);
-            cursor += 4 * scale;
+            cursor += 6 * scale;
         }
     }
 
     private void drawGlyph(char ch, int x, int y, int scale, int rgb) {
         int[] rows = glyph(ch);
         for (int row = 0; row < rows.length; row++) {
-            for (int col = 0; col < 3; col++) {
-                if ((rows[row] & (1 << (2 - col))) != 0) {
+            for (int col = 0; col < 5; col++) {
+                if ((rows[row] & (1 << (4 - col))) != 0) {
                     addOverlayRect(x + col * scale, y + row * scale, scale, scale, rgb);
                 }
             }
@@ -546,27 +1051,51 @@ public final class GLRenderer implements TriangleRenderer {
         vertCount += 6;
     }
 
+    // 5-wide × 7-tall bitmap font. Each int is a row bitmask: bit4=leftmost col.
     private static int[] glyph(char ch) {
         return switch (ch) {
-            case '0' -> new int[]{7, 5, 5, 5, 7};
-            case '1' -> new int[]{2, 6, 2, 2, 7};
-            case '2' -> new int[]{7, 1, 7, 4, 7};
-            case '3' -> new int[]{7, 1, 7, 1, 7};
-            case '4' -> new int[]{5, 5, 7, 1, 1};
-            case '5' -> new int[]{7, 4, 7, 1, 7};
-            case '6' -> new int[]{7, 4, 7, 5, 7};
-            case '7' -> new int[]{7, 1, 1, 1, 1};
-            case '8' -> new int[]{7, 5, 7, 5, 7};
-            case '9' -> new int[]{7, 5, 7, 1, 7};
-            case 'B' -> new int[]{6, 5, 6, 5, 6};
-            case 'E' -> new int[]{7, 4, 6, 4, 7};
-            case 'F' -> new int[]{7, 4, 6, 4, 4};
-            case 'M' -> new int[]{5, 7, 7, 5, 5};
-            case 'P' -> new int[]{6, 5, 6, 4, 4};
-            case 'S' -> new int[]{7, 4, 7, 1, 7};
-            case 'T' -> new int[]{7, 2, 2, 2, 2};
-            case ':' -> new int[]{0, 2, 0, 2, 0};
-            default  -> new int[]{0, 0, 0, 0, 0};
+            case '0' -> new int[]{14, 17, 17, 17, 17, 17, 14};
+            case '1' -> new int[]{ 4, 12,  4,  4,  4,  4, 31};
+            case '2' -> new int[]{14, 17,  1,  6,  8, 16, 31};
+            case '3' -> new int[]{14, 17,  1,  6,  1, 17, 14};
+            case '4' -> new int[]{ 2,  6, 10, 18, 31,  2,  2};
+            case '5' -> new int[]{31, 16, 16, 30,  1, 17, 14};
+            case '6' -> new int[]{14, 17, 16, 30, 17, 17, 14};
+            case '7' -> new int[]{31,  1,  2,  4,  8,  8,  8};
+            case '8' -> new int[]{14, 17, 17, 14, 17, 17, 14};
+            case '9' -> new int[]{14, 17, 17, 15,  1, 17, 14};
+            case 'A' -> new int[]{14, 17, 17, 31, 17, 17, 17};
+            case 'B' -> new int[]{30, 17, 17, 30, 17, 17, 30};
+            case 'C' -> new int[]{14, 17, 16, 16, 16, 17, 14};
+            case 'D' -> new int[]{30, 17, 17, 17, 17, 17, 30};
+            case 'E' -> new int[]{31, 16, 16, 30, 16, 16, 31};
+            case 'F' -> new int[]{31, 16, 16, 30, 16, 16, 16};
+            case 'G' -> new int[]{14, 17, 16, 19, 17, 17, 14};
+            case 'H' -> new int[]{17, 17, 17, 31, 17, 17, 17};
+            case 'I' -> new int[]{31,  4,  4,  4,  4,  4, 31};
+            case 'J' -> new int[]{31,  1,  1,  1,  1, 17, 14};
+            case 'K' -> new int[]{17, 18, 20, 24, 20, 18, 17};
+            case 'L' -> new int[]{16, 16, 16, 16, 16, 16, 31};
+            case 'M' -> new int[]{17, 27, 21, 17, 17, 17, 17};
+            case 'N' -> new int[]{17, 25, 21, 19, 17, 17, 17};
+            case 'O' -> new int[]{14, 17, 17, 17, 17, 17, 14};
+            case 'P' -> new int[]{30, 17, 17, 30, 16, 16, 16};
+            case 'Q' -> new int[]{14, 17, 17, 17, 21, 19, 15};
+            case 'R' -> new int[]{30, 17, 17, 30, 20, 18, 17};
+            case 'S' -> new int[]{14, 17, 16, 14,  1, 17, 14};
+            case 'T' -> new int[]{31,  4,  4,  4,  4,  4,  4};
+            case 'U' -> new int[]{17, 17, 17, 17, 17, 17, 14};
+            case 'V' -> new int[]{17, 17, 17, 17, 17, 10,  4};
+            case 'W' -> new int[]{17, 17, 17, 21, 27, 17, 17};
+            case 'X' -> new int[]{17, 17, 10,  4, 10, 17, 17};
+            case 'Y' -> new int[]{17, 17, 10,  4,  4,  4,  4};
+            case 'Z' -> new int[]{31,  1,  2,  4,  8, 16, 31};
+            case '.' -> new int[]{ 0,  0,  0,  0,  0,  6,  6};
+            case ':' -> new int[]{ 0,  6,  6,  0,  6,  6,  0};
+            case ' ' -> new int[]{ 0,  0,  0,  0,  0,  0,  0};
+            case '+' -> new int[]{ 0,  0,  4, 14,  4,  0,  0};
+            case '-' -> new int[]{ 0,  0,  0, 14,  0,  0,  0};
+            default  -> new int[]{ 0,  0,  0,  0,  0,  0,  0};
         };
     }
 
@@ -579,6 +1108,13 @@ public final class GLRenderer implements TriangleRenderer {
             if (shell == null) return;
             int mouseX = toLogicalX(x);
             int mouseY = toLogicalY(y);
+            cursorX = mouseX;
+            cursorY = mouseY;
+            if (isSidebarX(mouseX)) {
+                shell.mouseX = -1;
+                shell.mouseY = -1;
+                return;
+            }
             if (middleMouseDragging && shell instanceof Client) {
                 ((Client) shell).rotateOrbitCamera(mouseX - middleMouseX, mouseY - middleMouseY);
                 middleMouseX = mouseX;
@@ -590,6 +1126,10 @@ public final class GLRenderer implements TriangleRenderer {
 
         glfwSetMouseButtonCallback(window, (win, button, action, mods) -> {
             if (shell == null) return;
+            if (action == GLFW_PRESS && isSidebarX(cursorX)) {
+                clickSidebar(cursorX, cursorY);
+                return;
+            }
             if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
                 middleMouseDragging = action == GLFW_PRESS;
                 middleMouseX = shell.mouseX;
@@ -652,22 +1192,175 @@ public final class GLRenderer implements TriangleRenderer {
 
     private void updateOutputViewport(int width, int height) {
         if (width <= 0 || height <= 0) return;
-        double scale = Math.min((double) width / screenW, (double) height / screenH);
-        int viewportW = Math.max(1, (int) Math.round(screenW * scale));
-        int viewportH = Math.max(1, (int) Math.round(screenH * scale));
-        glViewport((width - viewportW) / 2, (height - viewportH) / 2, viewportW, viewportH);
+        if (sidebarInsideWindow()) {
+            int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+            double scale = Math.min((double) width / (screenW + sidebarLogW),
+                                    (double) height / screenH);
+            int gameW   = Math.max(1, (int) Math.round(screenW * scale));
+            int gameH   = Math.max(1, (int) Math.round(screenH * scale));
+            int sidebarW = Math.max(1, (int) Math.round(sidebarLogW * scale));
+            int gameX   = sidebarOpen ? 0 : (width - gameW - sidebarW) / 2;
+            glViewport(gameX, (height - gameH) / 2, gameW, gameH);
+        } else {
+            double scale = Math.min((double) width / outputW(), (double) height / screenH);
+            int viewportW = Math.max(1, (int) Math.round(screenW * scale));
+            int viewportH = Math.max(1, (int) Math.round(screenH * scale));
+            int fullW     = Math.max(1, (int) Math.round(outputW() * scale));
+            glViewport((width - fullW) / 2, (height - viewportH) / 2, viewportW, viewportH);
+        }
     }
 
     private int toLogicalX(double x) {
-        double scale = Math.min((double) windowW / screenW, (double) windowH / screenH);
-        double left = (windowW - screenW * scale) / 2.0;
+        if (sidebarInsideWindow()) {
+            int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+            double scale = Math.min((double) windowW / (screenW + sidebarLogW),
+                                    (double) windowH / screenH);
+            double sidebarPhysW     = sidebarLogW * scale;
+            double sidebarPhysStart = windowW - sidebarPhysW;
+            if (x >= sidebarPhysStart) {
+                // cursor is over the sidebar at the right edge
+                return screenW + (int) ((x - sidebarPhysStart) / scale);
+            }
+            // cursor is over the game canvas
+            double gamePhysW    = screenW * scale;
+            double gamePhysStart = sidebarOpen ? 0 : (sidebarPhysStart - gamePhysW) / 2.0;
+            return (int) ((x - gamePhysStart) / scale);
+        }
+        double scale = Math.min((double) windowW / outputW(), (double) windowH / screenH);
+        double left  = (windowW - outputW() * scale) / 2.0;
         return (int) ((x - left) / scale);
     }
 
     private int toLogicalY(double y) {
-        double scale = Math.min((double) windowW / screenW, (double) windowH / screenH);
+        double scale;
+        if (sidebarInsideWindow()) {
+            int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+            scale = Math.min((double) windowW / (screenW + sidebarLogW),
+                             (double) windowH / screenH);
+        } else {
+            scale = Math.min((double) windowW / outputW(), (double) windowH / screenH);
+        }
         double top = (windowH - screenH * scale) / 2.0;
         return (int) ((y - top) / scale);
+    }
+
+    private int outputW() {
+        return screenW + SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+    }
+
+    private void setOutputViewport(int logicalWidth) {
+        int[] width = new int[1];
+        int[] height = new int[1];
+        glfwGetFramebufferSize(window, width, height);
+        double scale = Math.min((double) width[0] / logicalWidth, (double) height[0] / screenH);
+        int viewportW = Math.max(1, (int) Math.round(logicalWidth * scale));
+        int viewportH = Math.max(1, (int) Math.round(screenH * scale));
+        glViewport(viewportX(width[0], viewportW), (height[0] - viewportH) / 2, viewportW, viewportH);
+    }
+
+    private void clickSidebar(int x, int y) {
+        int railX = sidebarRailX();
+        if (x >= railX) {
+            int tab = y / SIDEBAR_ROW_H;
+            if (tab < 0 || tab >= SIDEBAR_TABS) return;
+            if (sidebarOpen && sidebarTab == tab) {
+                sidebarOpen = false;
+            } else {
+                sidebarOpen = true;
+                sidebarTab  = tab;
+            }
+            resizeForSidebar();
+            updateOutputViewport();
+            return;
+        }
+        if (!sidebarOpen) return;
+        // Close button (top-right X in the panel header)
+        if (x >= sidebarPanelX() + SIDEBAR_PANEL_W - 28 && y <= 42) {
+            sidebarOpen = false;
+            resizeForSidebar();
+            updateOutputViewport();
+            return;
+        }
+        // Per-tab click handling
+        switch (sidebarTab) {
+            case 0 -> { // Hiscores – skill selector buttons (2 per row, 10 rows, y=52..181)
+                int px = sidebarPanelX();
+                int relX = x - (px + 10);
+                int relY = y - 52;
+                int col = relX / 82;
+                int row = relY / 13;
+                if (row >= 0 && row < 10 && col >= 0 && col < 2) {
+                    int skill = row * 2 + col;
+                    if (skill < HSCORE_SKILL_LABEL.length && skill != hiscoresSkill) {
+                        hiscoresSkill  = skill;
+                        hiscoresNames  = new String[0];
+                        hiscoresLevels = new int[0];
+                        hiscoresFetchAt = 0; // force immediate re-fetch
+                    }
+                }
+            }
+            case 1 -> { // XP Screen Toggle
+                if (y >= 140 && y < 184) xpScreenEnabled = !xpScreenEnabled;
+            }
+            case 2 -> { // XP Tracker – reset button
+                int px = sidebarPanelX();
+                if (x >= px + SIDEBAR_PANEL_W - 58 && y >= 52 && y < 68) {
+                    resetXpSession();
+                }
+            }
+            case 5 -> { // Settings toggles (each row is 44 px tall starting at y=72)
+                if (y >= 72  && y < 116) sidebarGpuEnabled   = !sidebarGpuEnabled;
+                if (y >= 116 && y < 160) sidebarFpsEnabled    = !sidebarFpsEnabled;
+                if (y >= 160 && y < 204) sidebarRoofsEnabled  = !sidebarRoofsEnabled;
+                if (y >= 204 && y < 248) toggleFullscreen();
+                if (y >= 248 && y < 292) settingsShiftClick   = !settingsShiftClick;
+                if (y >= 292 && y < 336) settingsDiscordRp    = !settingsDiscordRp;
+            }
+        }
+    }
+
+    private void toggleFullscreen() {
+        settingsFullscreen = !settingsFullscreen;
+        if (settingsFullscreen) {
+            long monitor = glfwGetPrimaryMonitor();
+            org.lwjgl.glfw.GLFWVidMode mode = glfwGetVideoMode(monitor);
+            if (mode != null) {
+                glfwSetWindowMonitor(window, monitor, 0, 0,
+                        mode.width(), mode.height(), mode.refreshRate());
+            }
+        } else {
+            glfwSetWindowMonitor(window, NULL, 100, 100, outputW(), screenH, GLFW_DONT_CARE);
+        }
+        updateOutputViewport();
+    }
+
+    private boolean sidebarInsideWindow() {
+        return glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
+    }
+
+    private int sidebarRailX() {
+        return screenW + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+    }
+
+    private int sidebarPanelX() {
+        return screenW;
+    }
+
+    private boolean isSidebarX(int x) {
+        if (x >= sidebarRailX()) return true;
+        return sidebarOpen && x >= sidebarPanelX();
+    }
+
+    private void resizeForSidebar() {
+        if (!sidebarInsideWindow()) {
+            glfwSetWindowSize(window, outputW(), screenH);
+        }
+        updateOutputViewport();
+    }
+
+    private int viewportX(int framebufferW, int viewportW) {
+        if (sidebarInsideWindow() && sidebarOpen) return 0;
+        return (framebufferW - viewportW) / 2;
     }
 
     /** Map a GLFW key constant to the game's internal key code. */

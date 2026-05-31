@@ -11,6 +11,10 @@ if (-not (Get-Command javac -ErrorAction SilentlyContinue)) {
 Remove-Item -Recurse -Force target -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force target/classes | Out-Null
 
+if (Test-Path src/main/resources) {
+    Copy-Item -Recurse src/main/resources/* target/classes/ -Force
+}
+
 Get-ChildItem -Recurse src/main/java -Filter *.java | ForEach-Object FullName | Set-Content sources.txt
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
