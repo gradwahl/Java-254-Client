@@ -11,6 +11,7 @@ public final class Main {
 
     public static void main(String[] args) throws Exception {
         setupCrashLogging();
+        ClientDebugger.enable();
         // Default: node-id=10  port-offset=0  highmem  members  storeid=32
         // Override via args: java -jar client.jar 10 0 highmem members 32
         String[] clientArgs = args.length == 5 ? args : new String[]{"10", "0", "highmem", "members", "32"};

@@ -1,5 +1,6 @@
 package com.gradwahl.rs254.net;
 
+import com.gradwahl.rs254.ClientDebugger;
 import com.gradwahl.rs254.io.IsaacCipher;
 import com.gradwahl.rs254.io.Protocol;
 
@@ -70,11 +71,15 @@ public final class GameSession implements AutoCloseable {
 
                 if (opcode == OPCODE_LOGOUT) {
                     System.out.println("[game] Server sent LOGOUT");
+                    ClientDebugger.onServerLogoutPacket();
                     break;
                 }
             }
         } catch (IOException e) {
-            if (running) System.out.println("[game] Connection lost: " + e.getMessage());
+            if (running) {
+                System.out.println("[game] Connection lost: " + e.getMessage());
+                ClientDebugger.onConnectionLost(e.getClass().getSimpleName() + ": " + e.getMessage());
+            }
         } finally {
             running = false;
             close();

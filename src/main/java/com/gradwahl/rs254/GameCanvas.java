@@ -167,6 +167,7 @@ public final class GameCanvas extends Canvas implements Runnable {
     private void tick() { /* game-state update hook */ }
 
     private void render() {
+        ClientDebugger.onRenderStart();
         // Draw everything into an off-screen BufferedImage first.
         // This guarantees correct ARGB alpha compositing (BGRA images with
         // transparent pixels) regardless of the hardware surface backing the

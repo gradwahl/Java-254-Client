@@ -12,6 +12,7 @@ import jagex2.wordenc.WordFilter;
 import jagex2.wordenc.WordPack;
 import sign.signlink;
 import com.gradwahl.rs254.gl.GLRenderer;
+import com.gradwahl.rs254.ClientDebugger;
 
 import java.awt.*;
 import java.io.DataInputStream;
@@ -2657,6 +2658,9 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.q(I)V")
 	public void logout() {
+		ClientDebugger.lastIdleCycles    = super.idleCycles;
+		ClientDebugger.lastPendingLogout = this.pendingLogout;
+		ClientDebugger.onLogout(ClientDebugger.LogoutReason.UNKNOWN);
 		try {
 			if (this.stream != null) {
 				this.stream.close();
@@ -2992,6 +2996,7 @@ public class Client extends GameShell {
 			this.handleInputKey();
 			super.idleCycles++;
 			if (super.idleCycles > 4500) {
+				ClientDebugger.onIdleTimeout(super.idleCycles);
 				this.pendingLogout = 250;
 				super.idleCycles -= 500;
 				// IDLE_TIMER
@@ -3064,8 +3069,10 @@ public class Client extends GameShell {
 					this.noTimeoutCycle = 0;
 				}
 			} catch (IOException var34) {
+				ClientDebugger.onSocketError(var34);
 				this.tryReconnect();
 			} catch (Exception var35) {
+				ClientDebugger.onLogout(ClientDebugger.LogoutReason.UNHANDLED_EXCEPTION, var35);
 				this.logout();
 			}
 		}
@@ -3073,6 +3080,9 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.Q(I)V")
 	public void tryReconnect() {
+		ClientDebugger.lastIdleCycles    = super.idleCycles;
+		ClientDebugger.lastPendingLogout = this.pendingLogout;
+		ClientDebugger.onTryReconnect();
 		if (this.pendingLogout > 0) {
 			this.logout();
 			return;
