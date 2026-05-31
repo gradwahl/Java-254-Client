@@ -38,9 +38,3 @@ You can also launch a standalone Maven or GitHub Release JAR directly:
 ```powershell
 java -jar java-254-client.jar
 ```
-
-## Distribution
-
-GitHub Releases provide a single executable JAR containing the compiled client,
-required libraries, and Windows LWJGL natives. No additional `lib/` or
-`target/classes/` folder is required.
