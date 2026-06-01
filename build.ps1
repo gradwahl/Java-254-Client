@@ -21,15 +21,31 @@ $ErrorActionPreference = "Continue"
 javac --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes '@sources.txt'
 $javacExitCode = $LASTEXITCODE
 $ErrorActionPreference = $previousErrorActionPreference
+Remove-Item sources.txt -Force
 if ($javacExitCode -ne 0) {
     throw "javac failed with exit code $javacExitCode"
 }
-$classpath = (Get-ChildItem lib -Filter *.jar |
-    Sort-Object Name |
-    ForEach-Object { "../lib/$($_.Name)" }) -join " "
+
+# Fold runtime dependencies and LWJGL natives into the artifact so the JAR can
+# be copied and launched without a sibling lib directory.
+Push-Location target/classes
+try {
+    Get-ChildItem ../../lib -Filter *.jar | Sort-Object Name | ForEach-Object {
+        jar --extract --file $_.FullName
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to extract dependency $($_.Name)"
+        }
+    }
+} finally {
+    Pop-Location
+}
+Remove-Item target/classes/META-INF/MANIFEST.MF -Force -ErrorAction SilentlyContinue
+Remove-Item target/classes/META-INF/*.SF -Force -ErrorAction SilentlyContinue
+Remove-Item target/classes/META-INF/*.DSA -Force -ErrorAction SilentlyContinue
+Remove-Item target/classes/META-INF/*.RSA -Force -ErrorAction SilentlyContinue
+
 @"
 Manifest-Version: 1.0
-Class-Path: $classpath
 
 "@ | Set-Content -Encoding ascii target/manifest.mf
 

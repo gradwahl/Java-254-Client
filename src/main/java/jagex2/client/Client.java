@@ -21,6 +21,9 @@ import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.zip.CRC32;
 
 @ObfuscatedName("client")
@@ -478,6 +481,24 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.fi")
 	public int[] statXP = new int[Stats.COUNT];
+
+	private static final int XP_DROP_COUNT = 5;
+	private static final int XP_DROP_LIFETIME = 100;
+	private static final String[] XP_DROP_SKILL_NAMES = {
+		"Attack", "Defence", "Strength", "Hitpoints", "Range", "Prayer", "Magic",
+		"Cooking", "Woodcutting", "Fletching", "Fishing", "Firemaking", "Crafting",
+		"Smithing", "Mining", "Herblore", "Agility", "Thieving", "Slayer", "Unused",
+		"Runecraft", "Unused", "Unused", "Unused", "Unused"
+	};
+	private static final int[] XP_DROP_ICON_ORDER = {
+		0, 3, 14, 2, 16, 13, 1, 15, 10, 4, 17, 7, 5, 12, 11, 6, 9, 8, 20
+	};
+	private final boolean[] statXpInitialized = new boolean[Stats.COUNT];
+	private final int[] xpDropSkill = new int[XP_DROP_COUNT];
+	private final int[] xpDropAmount = new int[XP_DROP_COUNT];
+	private final int[] xpDropStartCycle = new int[XP_DROP_COUNT];
+	private final Pix32[] xpDropSkillIcons = new Pix32[Stats.COUNT];
+	private boolean xpDropSkillIconsLoaded;
 
 	@ObfuscatedName("client.gi")
 	public String socialMessage = "";
@@ -1903,7 +1924,8 @@ public class Client extends GameShell {
 		}
 		if (glRenderer != null) {
 			if (glRenderer.shouldClose()) { this.state = -1; return; }
-			glRenderer.beginFrame(this.ingame);
+			boolean drawScene = !this.ingame || this.sceneState == 2;
+			glRenderer.beginFrame(this.ingame && drawScene, drawScene);
 		}
 		drawCycle++;
 		if (this.ingame) {
@@ -1932,7 +1954,9 @@ public class Client extends GameShell {
 			this.mouseTracking.active = false;
 		}
 		this.mouseTracking = null;
-		this.onDemand.stop();
+		if (this.onDemand != null) {
+			this.onDemand.stop();
+		}
 		this.onDemand = null;
 		this.out = null;
 		this.login = null;
@@ -6026,6 +6050,7 @@ public class Client extends GameShell {
 		if (this.inMultizone == 1) {
 			this.imageHeadicons[1].plotSprite(472, 296);
 		}
+		this.drawXpDrops();
 		if (this.systemUpdateTimer == 0) {
 			return;
 		}
@@ -6036,6 +6061,233 @@ public class Client extends GameShell {
 			this.fontPlain12.drawString(16776960, 4, 329, "System update in: " + var3 + ":0" + var4);
 		} else {
 			this.fontPlain12.drawString(16776960, 4, 329, "System update in: " + var3 + ":" + var4);
+		}
+	}
+
+	private void addXpDrop(int skill, int amount) {
+		GLRenderer.xpSessionGains[skill] += amount;
+		if (!GLRenderer.xpScreenEnabled) {
+			return;
+		}
+		if (this.xpDropAmount[0] > 0 && this.xpDropSkill[0] == skill
+				&& loopCycle - this.xpDropStartCycle[0] <= 10) {
+			this.xpDropAmount[0] += amount;
+			this.xpDropStartCycle[0] = loopCycle;
+			return;
+		}
+		for (int i = XP_DROP_COUNT - 1; i > 0; i--) {
+			this.xpDropSkill[i] = this.xpDropSkill[i - 1];
+			this.xpDropAmount[i] = this.xpDropAmount[i - 1];
+			this.xpDropStartCycle[i] = this.xpDropStartCycle[i - 1];
+		}
+		this.xpDropSkill[0] = skill;
+		this.xpDropAmount[0] = amount;
+		this.xpDropStartCycle[0] = loopCycle;
+	}
+
+	private void drawXpDrops() {
+		if (!GLRenderer.xpScreenEnabled) {
+			for (int i = 0; i < XP_DROP_COUNT; i++) {
+				this.xpDropAmount[i] = 0;
+			}
+			return;
+		}
+		this.loadXpDropSkillIcons();
+		int row = 0;
+		for (int i = 0; i < XP_DROP_COUNT; i++) {
+			int amount = this.xpDropAmount[i];
+			int age = loopCycle - this.xpDropStartCycle[i];
+			if (amount <= 0 || age > XP_DROP_LIFETIME) {
+				this.xpDropAmount[i] = 0;
+				continue;
+			}
+			int skill = this.xpDropSkill[i];
+			String text = XP_DROP_SKILL_NAMES[skill] + " +" + amount;
+			Pix32 icon = this.xpDropSkillIcons[skill];
+			int iconWidth = icon == null ? 0 : icon.wi + 4;
+			int x = 508 - this.fontPlain11.stringWid(text);
+			int y = 17 + row * 18 - Math.min(age / 10, 6);
+			if (icon != null) {
+				icon.plotSprite(x - iconWidth, y - icon.hi + 2);
+			}
+			this.fontPlain11.drawString(0, x + 1, y + 1, text);
+			this.fontPlain11.drawString(16777215, x, y, text);
+			row++;
+		}
+	}
+
+	private void loadXpDropSkillIcons() {
+		if (this.xpDropSkillIconsLoaded || IfType.list == null || this.tabInterfaceId[1] < 0) {
+			return;
+		}
+		List<SkillIconCandidate> candidates = new ArrayList<>();
+		this.collectSkillIcons(IfType.list[this.tabInterfaceId[1]], 0, 0,
+				new boolean[IfType.list.length], candidates);
+		candidates.sort(Comparator.comparingInt((SkillIconCandidate icon) -> icon.y)
+				.thenComparingInt(icon -> icon.x));
+		List<SkillIconCandidate> unique = new ArrayList<>();
+		for (SkillIconCandidate candidate : candidates) {
+			boolean found = false;
+			for (SkillIconCandidate existing : unique) {
+				if (existing.x == candidate.x && existing.y == candidate.y) {
+					found = true;
+					break;
+				}
+			}
+			if (!found) {
+				unique.add(candidate);
+			}
+		}
+		if (unique.size() < XP_DROP_ICON_ORDER.length) {
+			return;
+		}
+		for (int i = 0; i < XP_DROP_ICON_ORDER.length; i++) {
+			this.xpDropSkillIcons[XP_DROP_ICON_ORDER[i]] = this.prepareXpDropIcon(unique.get(i).sprite);
+		}
+		this.xpDropSkillIconsLoaded = true;
+	}
+
+	private Pix32 prepareXpDropIcon(Pix32 source) {
+		int width = source.wi;
+		int height = source.hi;
+		boolean[] removed = new boolean[width * height];
+		int[] queue = new int[removed.length];
+		int read = 0;
+		int write = 0;
+		int backdrop = averageXpDropBackdrop(source);
+		for (int x = 0; x < width; x++) {
+			write = this.queueXpDropBackdrop(source, x, 0, backdrop, removed, queue, write);
+			write = this.queueXpDropBackdrop(source, x, height - 1, backdrop, removed, queue, write);
+		}
+		for (int y = 1; y < height - 1; y++) {
+			write = this.queueXpDropBackdrop(source, 0, y, backdrop, removed, queue, write);
+			write = this.queueXpDropBackdrop(source, width - 1, y, backdrop, removed, queue, write);
+		}
+		while (read < write) {
+			int index = queue[read++];
+			int x = index % width;
+			int y = index / width;
+			if (x > 0) write = this.queueXpDropBackdrop(source, x - 1, y, backdrop, removed, queue, write);
+			if (x + 1 < width) write = this.queueXpDropBackdrop(source, x + 1, y, backdrop, removed, queue, write);
+			if (y > 0) write = this.queueXpDropBackdrop(source, x, y - 1, backdrop, removed, queue, write);
+			if (y + 1 < height) write = this.queueXpDropBackdrop(source, x, y + 1, backdrop, removed, queue, write);
+		}
+		int left = width;
+		int top = height;
+		int right = -1;
+		int bottom = -1;
+		for (int y = 0; y < height; y++) {
+			for (int x = 0; x < width; x++) {
+				int index = x + y * width;
+				if (!removed[index] && source.data[index] != 0) {
+					left = Math.min(left, x);
+					top = Math.min(top, y);
+					right = Math.max(right, x);
+					bottom = Math.max(bottom, y);
+				}
+			}
+		}
+		if (right < left || bottom < top) {
+			return null;
+		}
+		int cropWidth = right - left + 1;
+		int cropHeight = bottom - top + 1;
+		double scale = Math.min(1.0, 16.0 / Math.max(cropWidth, cropHeight));
+		int iconWidth = Math.max(1, (int) Math.round(cropWidth * scale));
+		int iconHeight = Math.max(1, (int) Math.round(cropHeight * scale));
+		Pix32 icon = new Pix32(iconWidth, iconHeight);
+		for (int y = 0; y < iconHeight; y++) {
+			int sourceY = top + Math.min(cropHeight - 1, y * cropHeight / iconHeight);
+			for (int x = 0; x < iconWidth; x++) {
+				int sourceX = left + Math.min(cropWidth - 1, x * cropWidth / iconWidth);
+				int sourceIndex = sourceX + sourceY * width;
+				if (!removed[sourceIndex]) {
+					icon.data[x + y * iconWidth] = source.data[sourceIndex];
+				}
+			}
+		}
+		return icon;
+	}
+
+	private int queueXpDropBackdrop(Pix32 icon, int x, int y, int backdrop,
+			boolean[] removed, int[] queue, int write) {
+		int index = x + y * icon.wi;
+		if (removed[index] || !isXpDropBackdrop(icon.data[index], backdrop)) {
+			return write;
+		}
+		removed[index] = true;
+		queue[write++] = index;
+		return write;
+	}
+
+	private static int averageXpDropBackdrop(Pix32 icon) {
+		int[] corners = {
+			icon.data[0],
+			icon.data[icon.wi - 1],
+			icon.data[(icon.hi - 1) * icon.wi],
+			icon.data[icon.data.length - 1]
+		};
+		int red = 0;
+		int green = 0;
+		int blue = 0;
+		for (int rgb : corners) {
+			red += rgb >> 16 & 0xFF;
+			green += rgb >> 8 & 0xFF;
+			blue += rgb & 0xFF;
+		}
+		return red / corners.length << 16 | green / corners.length << 8 | blue / corners.length;
+	}
+
+	private static boolean isXpDropBackdrop(int rgb, int backdrop) {
+		if (rgb == 0) {
+			return true;
+		}
+		int red = rgb >> 16 & 0xFF;
+		int green = rgb >> 8 & 0xFF;
+		int blue = rgb & 0xFF;
+		int backdropRed = backdrop >> 16 & 0xFF;
+		int backdropGreen = backdrop >> 8 & 0xFF;
+		int backdropBlue = backdrop & 0xFF;
+		int distance = Math.abs(red - backdropRed)
+				+ Math.abs(green - backdropGreen)
+				+ Math.abs(blue - backdropBlue);
+		return distance <= 72;
+	}
+
+	private void collectSkillIcons(IfType component, int x, int y, boolean[] visited,
+			List<SkillIconCandidate> icons) {
+		if (component == null || component.id < 0 || component.id >= visited.length
+				|| visited[component.id]) {
+			return;
+		}
+		visited[component.id] = true;
+		int componentX = x + component.x;
+		int componentY = y + component.y;
+		if (component.type == 5 && component.graphic != null
+				&& component.graphic.wi <= 32 && component.graphic.hi <= 32) {
+			icons.add(new SkillIconCandidate(componentX, componentY, component.graphic));
+		}
+		if (component.children == null) {
+			return;
+		}
+		for (int i = 0; i < component.children.length; i++) {
+			int childId = component.children[i];
+			if (childId >= 0 && childId < IfType.list.length) {
+				this.collectSkillIcons(IfType.list[childId], componentX + component.childX[i],
+						componentY + component.childY[i], visited, icons);
+			}
+		}
+	}
+
+	private static final class SkillIconCandidate {
+		private final int x;
+		private final int y;
+		private final Pix32 sprite;
+
+		private SkillIconCandidate(int x, int y, Pix32 sprite) {
+			this.x = x;
+			this.y = y;
+			this.sprite = sprite;
 		}
 	}
 
@@ -6774,6 +7026,10 @@ public class Client extends GameShell {
 				int var28 = this.in.g1();
 				int var29 = this.in.g4();
 				int var30 = this.in.g1();
+				if (this.statXpInitialized[var28] && var29 > this.statXP[var28]) {
+					this.addXpDrop(var28, var29 - this.statXP[var28]);
+				}
+				this.statXpInitialized[var28] = true;
 				this.statXP[var28] = var29;
 				this.statEffectiveLevel[var28] = var30;
 				this.statBaseLevel[var28] = 1;

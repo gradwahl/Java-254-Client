@@ -16,7 +16,10 @@ Or with PowerShell:
 
 Requires JDK 17+.
 
-For a standalone JAR containing the required libraries, use Maven:
+The generated `target/java-254-client.jar` is standalone: it contains the
+required libraries and native binaries, and can be copied elsewhere by itself.
+
+You can also build with Maven:
 
 ```powershell
 mvn clean package
@@ -33,7 +36,7 @@ run.bat
 Using `run.bat` is recommended because it supplies the Java options used by
 LWJGL and starts the client with the default server settings.
 
-You can also launch a standalone Maven or GitHub Release JAR directly:
+You can also launch the generated JAR or a GitHub Release JAR directly:
 
 ```powershell
 java -jar java-254-client.jar

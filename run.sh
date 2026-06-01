@@ -27,6 +27,7 @@ fi
 
 # Auto-download LWJGL natives for this platform if not present
 MISSING=0
+REBUILD=0
 for mod in "${MODULES[@]}"; do
     jar="lib/${mod}-${LWJGL_VERSION}-${NATIVES_CLASSIFIER}.jar"
     if [ ! -f "$jar" ]; then
@@ -54,9 +55,10 @@ if [ "$MISSING" -eq 1 ]; then
         fi
     done
     echo "Natives downloaded."
+    REBUILD=1
 fi
 
-if [ ! -f target/java-254-client.jar ]; then
+if [ ! -f target/java-254-client.jar ] || [ "$REBUILD" -eq 1 ]; then
     bash build.sh
 fi
 
@@ -67,8 +69,8 @@ java \
     --add-opens java.base/java.lang=ALL-UNNAMED \
     --add-opens java.base/java.lang.reflect=ALL-UNNAMED \
     -XX:ErrorFile="$SCRIPT_DIR/jvm_crash_%p.log" \
-    -cp "lib/*:target/java-254-client.jar" \
-    com.gradwahl.rs254.Main 10 0 highmem members 32
+    -jar target/java-254-client.jar \
+    10 0 highmem members 32
 
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then

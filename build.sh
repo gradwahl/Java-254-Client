@@ -26,9 +26,15 @@ find src/main/java -name "*.java" > sources.txt
 javac --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes @sources.txt
 rm sources.txt
 
-CLASSPATH_ENTRIES=$(find lib -name "*.jar" | sort | while read -r jar; do echo "../lib/$(basename "$jar")"; done | tr '\n' ' ')
+# Fold runtime dependencies and LWJGL natives into the artifact so the JAR can
+# be copied and launched without a sibling lib directory.
+for dependency in lib/*.jar; do
+    (cd target/classes && jar --extract --file "../../$dependency")
+done
+rm -f target/classes/META-INF/MANIFEST.MF
+rm -f target/classes/META-INF/*.SF target/classes/META-INF/*.DSA target/classes/META-INF/*.RSA
 
-printf 'Manifest-Version: 1.0\nClass-Path: %s\n\n' "$CLASSPATH_ENTRIES" > target/manifest.mf
+printf 'Manifest-Version: 1.0\n\n' > target/manifest.mf
 
 jar --create --file target/java-254-client.jar \
     --main-class com.gradwahl.rs254.Main \

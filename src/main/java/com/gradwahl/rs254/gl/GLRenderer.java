@@ -329,8 +329,14 @@ public final class GLRenderer implements TriangleRenderer {
     }
 
     public void beginFrame(boolean clearViewport) {
+        beginFrame(clearViewport, true);
+    }
+
+    public void beginFrame(boolean clearViewport, boolean clearScene) {
         glfwPollEvents();
-        glClear(GL_COLOR_BUFFER_BIT);
+        if (clearScene) {
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
         buf.clear();
         vertCount    = 0;
         currentTexId = -1;
@@ -750,7 +756,7 @@ public final class GLRenderer implements TriangleRenderer {
         drawUiText("RK",   x + 10,  headerY, 1, 0xFF666666);
         drawUiText("NAME", x + 28,  headerY, 1, 0xFF666666);
         drawUiText("LVL",  x + 140, headerY, 1, 0xFF666666);
-        fillUiRect(x + 10, headerY + 9, SIDEBAR_PANEL_W - 20, 1, 0xFF363636);
+        fillUiRect(x + 10, headerY + 11, SIDEBAR_PANEL_W - 20, 1, 0xFF363636);
 
         // Leaderboard rows
         String[] names  = hiscoresNames;
@@ -1106,6 +1112,7 @@ public final class GLRenderer implements TriangleRenderer {
     private void setupCallbacks() {
         glfwSetCursorPosCallback(window, (win, x, y) -> {
             if (shell == null) return;
+            shell.idleCycles = 0;
             int mouseX = toLogicalX(x);
             int mouseY = toLogicalY(y);
             cursorX = mouseX;
@@ -1126,6 +1133,7 @@ public final class GLRenderer implements TriangleRenderer {
 
         glfwSetMouseButtonCallback(window, (win, button, action, mods) -> {
             if (shell == null) return;
+            shell.idleCycles = 0;
             if (action == GLFW_PRESS && isSidebarX(cursorX)) {
                 clickSidebar(cursorX, cursorY);
                 return;
@@ -1161,6 +1169,7 @@ public final class GLRenderer implements TriangleRenderer {
                 return;
             }
             if (shell == null) return;
+            shell.idleCycles = 0;
             int gk = glfwToGameKey(key);
             if (gk < 0) return;
             if (action == GLFW_PRESS || action == GLFW_REPEAT) {
@@ -1178,6 +1187,7 @@ public final class GLRenderer implements TriangleRenderer {
         glfwSetCharCallback(window, (win, codepoint) -> {
             if (codepoint == '`') return;
             if (shell == null || codepoint < 32 || codepoint >= 128) return;
+            shell.idleCycles = 0;
             shell.keyQueue[shell.keyQueueWritePos] = codepoint;
             shell.keyQueueWritePos = (shell.keyQueueWritePos + 1) & 0x7F;
         });
