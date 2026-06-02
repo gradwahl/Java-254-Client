@@ -1,43 +1,45 @@
-# Java 254 Client
+# Progressive Java Client
 
-Full RS2 build-254 client With Native OpenGL-lwjgl
+Early Java desktop client for a LostCityRS / 2004SP revision 254+ servers.
+
+## Current status
+
+Implemented so far:
+
+- Revision `254` configuration
+- Swing desktop window
+- 765x503 game canvas
+- 50 TPS game loop
+- WebSocket connection to the game server
+- `/crc` cache checksum loading
+- 254 login handshake using opcodes `14`, `16`, and `18`
+- ISAAC cipher setup
+- Client/server protocol constants
+- Test login UI
+
+Not implemented yet:
+
+Not implemented yet
+
+Planned features and major work still to be done:
+
+- 117HD-style rendering port
+- HD terrain lighting and shading
+- HD textures and normal maps
+- Water, lava, and animated surface effects
+- Improved skybox/fog/atmosphere rendering
+- Modern GPU-based scene rendering
+- 60 FPS animation/camera support while keeping server TPS compatible
+- True resizable and fullscreen client modes
+- Original 765x503 fixed-mode compatibility
+
+## Requirements
+
+- Java 17+
+- Maven
+- A compatible LostCity/2004Scape revision 254 server running locally or remotely (Progressive strongly advised)
 
 ## Build
 
-```bat
-build.bat
-```
-
-Or with PowerShell:
-
-```powershell
-.\build.ps1
-```
-
-Requires JDK 17+.
-
-The generated `target/Progressive-Java-Client.jar` is standalone: it contains the
-required libraries and native binaries, and can be copied elsewhere by itself.
-
-You can also build with Maven:
-
-```powershell
-mvn clean package
-```
-
-The standalone JAR is written to `target/`.
-
-## Run
-
-```bat
-run.bat
-```
-
-Using `run.bat` is recommended because it supplies the Java options used by
-LWJGL and starts the client with the default server settings.
-
-You can also launch the generated JAR or a GitHub Release JAR directly:
-
-```powershell
-java -jar Progressive-Java-Client.jar
-```
+```bash
+mvn package
