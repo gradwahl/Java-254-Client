@@ -19,10 +19,6 @@ Implemented so far:
 
 Not implemented yet:
 
-Not implemented yet
-
-Planned features and major work still to be done:
-
 - 117HD-style rendering port
 - HD terrain lighting and shading
 - HD textures and normal maps
