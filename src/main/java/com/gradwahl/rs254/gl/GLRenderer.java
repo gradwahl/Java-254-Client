@@ -10,17 +10,36 @@ import org.lwjgl.opengl.GL;
 import org.lwjgl.system.MemoryUtil;
 
 import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 import java.nio.IntBuffer;
 import java.nio.charset.StandardCharsets;
+import java.io.FileNotFoundException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.imageio.ImageIO;
+import javax.swing.JEditorPane;
+import javax.swing.SwingUtilities;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.DefaultCaret;
+import javax.swing.text.Element;
+import javax.swing.text.html.HTML;
+import javax.swing.text.html.HTMLDocument;
+import javax.swing.text.html.HTMLEditorKit;
 
 import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
 import static org.lwjgl.glfw.GLFW.*;
@@ -47,10 +66,177 @@ public final class GLRenderer implements TriangleRenderer {
     private static final int FLOATS_PER_VERT = 10;
     private static final int MAX_TRIS        = 32_768;
     private static final int MAX_VERTS       = MAX_TRIS * 3;
-    private static final int SIDEBAR_PANEL_W = 180;
-    private static final int SIDEBAR_RAIL_W  = 20;
-    private static final int SIDEBAR_ROW_H   = 34;
+    private static final int SIDEBAR_PANEL_W = 320;
+    private static final int SIDEBAR_RAIL_W  = 32;
+    private static final int SIDEBAR_ROW_H   = 36;
     private static final int SIDEBAR_TABS    = 6;
+    private static final int TAB_ICON_SIZE   = 22;
+    private static final int LOSTHQ_READER_W    = SIDEBAR_PANEL_W - 8;
+    private static final int LOSTHQ_READER_WIDE = 450; // wider canvas to capture horizontal overflow
+    private static final int HSCROLL_H          = 10;  // horizontal scrollbar height
+    private static final int LOSTHQ_QUEST_COMPLETE_IMAGE_W = 284;
+    private static final int[] XP_TABLE = buildXpTable();
+    private static final java.util.Map<String, String[][]> SKILL_UNLOCKS = buildSkillUnlocks();
+    private static java.util.Map<String, String[][]> buildSkillUnlocks() {
+        java.util.Map<String, String[][]> m = new java.util.LinkedHashMap<>();
+        m.put("attack", new String[][]{
+            {"Bronze weapons",  "1"},  {"Iron weapons",    "1"},
+            {"Steel weapons",   "5"},  {"Black weapons",  "10"},
+            {"Mithril weapons","20"},  {"Adamant weapons","30"},
+            {"Rune weapons",   "40"},  {"Dragon weapons", "60"},
+        });
+        m.put("strength", new String[][]{
+            {"Chickens / Goblins",     "1"},  {"Barbarian Village",    "1"},
+            {"Monks of Zamorak",      "15"},  {"Guards",              "20"},
+            {"Hill Giants",           "30"},  {"Moss Giants",         "40"},
+            {"Fire Giants",           "60"},  {"Greater Demons",      "70"},
+            {"Black Demons",          "80"},
+        });
+        m.put("defence", new String[][]{
+            {"Bronze armour",   "1"},  {"Iron armour",     "1"},
+            {"Steel armour",    "5"},  {"Black armour",   "10"},
+            {"Mithril armour", "20"},  {"Adamant armour", "30"},
+            {"Rune armour",    "40"},  {"Dragon armour",  "60"},
+        });
+        m.put("hitpoints", new String[][]{
+            {"Gained via combat XP", "1"},
+            {"Hitpoints increase with every combat level", "1"},
+        });
+        m.put("ranged", new String[][]{
+            {"Shortbow",         "1"},  {"Oak shortbow",    "5"},
+            {"Willow shortbow", "20"},  {"Maple shortbow", "30"},
+            {"Yew shortbow",    "40"},  {"Magic shortbow", "50"},
+        });
+        m.put("prayer", new String[][]{
+            {"Thick Skin",            "1"},  {"Burst of Strength",     "4"},
+            {"Clarity of Thought",    "7"},  {"Rock Skin",            "10"},
+            {"Superhuman Strength",  "13"},  {"Improved Reflexes",    "16"},
+            {"Rapid Restore",        "19"},  {"Rapid Heal",           "22"},
+            {"Protect Item",         "25"},  {"Steel Skin",           "28"},
+            {"Ultimate Strength",    "31"},  {"Incredible Reflexes",  "34"},
+            {"Protect from Magic",   "37"},  {"Protect from Missiles","40"},
+            {"Protect from Melee",   "43"},  {"Retribution",          "46"},
+            {"Redemption",           "49"},  {"Smite",                "52"},
+        });
+        m.put("magic", new String[][]{
+            {"Wind Strike",    "1"},  {"Water Strike",   "5"},
+            {"Earth Strike",   "9"},  {"Fire Strike",   "13"},
+            {"Wind Bolt",     "17"},  {"Water Bolt",    "23"},
+            {"Earth Bolt",    "29"},  {"Fire Bolt",     "35"},
+            {"Wind Blast",    "41"},  {"Superheat Item","43"},
+            {"Water Blast",   "47"},  {"High Alchemy",  "55"},
+            {"Earth Blast",   "53"},  {"Fire Blast",    "59"},
+            {"Wind Wave",     "62"},  {"Water Wave",    "65"},
+            {"Earth Wave",    "70"},  {"Fire Wave",     "75"},
+        });
+        m.put("cooking", new String[][]{
+            {"Shrimps",    "1"},  {"Anchovies",  "1"},
+            {"Sardine",    "1"},  {"Herring",    "5"},
+            {"Mackerel",  "10"},  {"Trout",     "15"},
+            {"Pike",      "20"},  {"Salmon",    "25"},
+            {"Tuna",      "30"},  {"Lobster",   "40"},
+            {"Bass",      "43"},  {"Swordfish", "45"},
+            {"Shark",     "80"},
+        });
+        m.put("woodcutting", new String[][]{
+            {"Logs",       "1"},  {"Oak logs",   "15"},
+            {"Willow logs","30"},  {"Maple logs", "45"},
+            {"Yew logs",  "60"},  {"Magic logs", "75"},
+        });
+        m.put("fletching", new String[][]{
+            {"Arrow shafts",        "1"},  {"Shortbow (u)",         "5"},
+            {"Longbow (u)",        "10"},  {"Oak shortbow (u)",     "20"},
+            {"Oak longbow (u)",    "25"},  {"Willow shortbow (u)", "35"},
+            {"Willow longbow (u)", "40"},  {"Maple shortbow (u)",  "50"},
+            {"Maple longbow (u)",  "55"},  {"Yew shortbow (u)",    "65"},
+            {"Yew longbow (u)",    "70"},  {"Magic shortbow (u)",  "80"},
+            {"Magic longbow (u)",  "85"},
+        });
+        m.put("fishing", new String[][]{
+            {"Shrimps",    "1"},  {"Sardine",    "5"},
+            {"Herring",   "10"},  {"Anchovies", "15"},
+            {"Trout",     "20"},  {"Pike",      "25"},
+            {"Salmon",    "30"},  {"Tuna",      "35"},
+            {"Lobster",   "40"},  {"Swordfish", "50"},
+            {"Shark",     "76"},
+        });
+        m.put("firemaking", new String[][]{
+            {"Logs",       "1"},  {"Oak logs",   "15"},
+            {"Willow logs","30"},  {"Maple logs", "45"},
+            {"Yew logs",  "60"},  {"Magic logs", "75"},
+        });
+        m.put("crafting", new String[][]{
+            {"Leather gloves",        "1"},  {"Leather boots",        "7"},
+            {"Leather cowl",          "9"},  {"Leather vambraces",   "11"},
+            {"Leather body",         "14"},  {"Leather chaps",       "18"},
+            {"Coif",                 "38"},  {"Studded body",        "41"},
+            {"Studded chaps",        "44"},  {"Snakeskin bandana",   "48"},
+            {"Snakeskin body",       "53"},  {"Green d'hide vambs",  "57"},
+            {"Green d'hide body",    "63"},  {"Blue d'hide body",    "71"},
+            {"Red d'hide body",      "77"},  {"Black d'hide body",   "84"},
+        });
+        m.put("smithing", new String[][]{
+            {"Bronze bar",    "1"},  {"Iron bar",      "15"},
+            {"Silver bar",   "20"},  {"Steel bar",     "30"},
+            {"Gold bar",     "40"},  {"Mithril bar",   "50"},
+            {"Adamantite bar","70"},  {"Runite bar",    "85"},
+        });
+        m.put("mining", new String[][]{
+            {"Rune essence", "1"},  {"Copper ore",    "1"},
+            {"Tin ore",       "1"},  {"Iron ore",     "15"},
+            {"Silver ore",   "20"},  {"Coal",         "30"},
+            {"Gold ore",     "40"},  {"Mithril ore",  "55"},
+            {"Adamantite ore","70"},  {"Runite ore",   "85"},
+        });
+        m.put("herblore", new String[][]{
+            {"Attack potion",  "1"},  {"Antipoison",     "5"},
+            {"Strength potion","12"},  {"Restore potion","22"},
+            {"Energy potion", "26"},  {"Defence potion","30"},
+            {"Combat potion", "36"},  {"Prayer potion", "38"},
+            {"Super attack",  "45"},  {"Fishing potion","50"},
+            {"Super energy",  "52"},  {"Super strength","55"},
+            {"Weapon poison", "60"},  {"Super defence", "66"},
+            {"Antifire",      "69"},  {"Ranging potion","72"},
+            {"Magic potion",  "76"},  {"Zamorak brew",  "78"},
+            {"Saradomin brew","81"},
+        });
+        m.put("agility", new String[][]{
+            {"Gnome Stronghold course", "1"},
+            {"Barbarian Outpost course","35"},
+            {"Ape Atoll course",        "48"},
+            {"Wilderness course",       "52"},
+            {"Advanced Gnome course",   "85"},
+        });
+        m.put("thieving", new String[][]{
+            {"Men / Women",        "1"},  {"Farmers",         "10"},
+            {"H.A.M. Members",    "15"},  {"Warriors",        "25"},
+            {"Rogues",            "32"},  {"Master Farmers",  "38"},
+            {"Guards",            "40"},  {"Fremennik Citizens","45"},
+            {"Knights of Ardougne","55"},  {"Watchmen",        "65"},
+            {"Paladins",          "70"},  {"Heroes",          "80"},
+            {"Elves",             "85"},
+        });
+        m.put("runecrafting", new String[][]{
+            {"Air runes",   "1"},  {"Mind runes",   "2"},
+            {"Water runes", "5"},  {"Earth runes",  "9"},
+            {"Fire runes", "14"},  {"Body runes",  "20"},
+            {"Cosmic runes","27"},  {"Chaos runes", "35"},
+            {"Nature runes","44"},  {"Law runes",   "54"},
+            {"Death runes", "65"},  {"Blood runes", "77"},
+        });
+        return m;
+    }
+    private static int[] buildXpTable() {
+        int[] xp = new int[100];
+        for (int level = 2; level <= 99; level++) {
+            long points = 0;
+            for (int i = 1; i < level; i++) {
+                points += (long) Math.floor(i + 300.0 * Math.pow(2.0, i / 7.0));
+            }
+            xp[level] = (int) (points / 4);
+        }
+        return xp;
+    }
 
     private static final java.awt.Font INTER_FONT;
     private static final java.awt.Font INTER_MEDIUM;
@@ -87,14 +273,36 @@ public final class GLRenderer implements TriangleRenderer {
         "Mining",    "Herblore", "Agility",    "Thieving", "Runecrafting"
     };
 
-    // LostHQ guide categories
+    // LostHQ toolkit destinations, kept in the same order as the website menu.
     private static final String[] LOSTHQ_ITEMS = {
         "QUEST GUIDES",
+        "SKILL GUIDES",
         "NPC DATABASE",
         "ITEM DATABASE",
         "SPECIAL GUIDES",
-        "TREASURE TRAILS",
-        "SKILL GUIDES"
+        "CALCULATORS",
+        "TREASURE TRAIL REWARDS",
+        "TREASURE TRAIL GUIDES"
+    };
+    private static final String[] LOSTHQ_URLS = {
+        "https://2004.losthq.rs/?p=questguides",
+        "https://2004.losthq.rs/?p=skillguides",
+        "https://2004.losthq.rs/?p=npcdb",
+        "https://2004.losthq.rs/?p=itemdb",
+        "https://2004.losthq.rs/?p=specialguides",
+        "https://2004.losthq.rs/?p=calculators",
+        "https://2004.losthq.rs/?p=cluetables",
+        "https://2004.losthq.rs/?p=clueguides"
+    };
+    private static final String[] LOSTHQ_ICON_URLS = {
+        "https://2004.losthq.rs/img/questicon.png",
+        "https://2004.losthq.rs/img/stats.png",
+        "https://2004.losthq.rs/img/skeleton.png",
+        "https://2004.losthq.rs/img/itemdb.png",
+        "https://2004.losthq.rs/img/specialguides.png",
+        "https://2004.losthq.rs/img/swordicon.png",
+        "https://2004.losthq.rs/img/casket.png",
+        "https://2004.losthq.rs/img/clueicon.png"
     };
 
     private static final String UI_VERT_SRC = """
@@ -201,6 +409,49 @@ public final class GLRenderer implements TriangleRenderer {
     private int     uiProg, uiQuadVao, uiQuadVbo, uiTex, uiTexLoc, uiUMinLoc, uiUMaxLoc;
     private IntBuffer uiDirectBuf;  // direct (off-heap) buffer for glTexSubImage2D
 
+    // Tab icons — loaded once from resources, drawn in the sidebar rail
+    private final BufferedImage[] tabIcons = new BufferedImage[SIDEBAR_TABS];
+    private final BufferedImage[] worldMapKeyPages = new BufferedImage[2];
+
+    // World map — region tiles are decoded lazily for the currently visible plane.
+    @SuppressWarnings("unchecked")
+    private final Map<String, BufferedImage>[] worldMapTiles = new Map[] {
+            new HashMap<>(), new HashMap<>(), new HashMap<>(), new HashMap<>()
+    };
+    private final Set<String> worldMapRegions = new HashSet<>();
+    private boolean       worldMapLoaded = false;
+    private float         mapZoom      = -1;  // -1 = needs init/load
+    private float         mapPanX      = 0;
+    private float         mapPanY      = 0;
+    private boolean       mapDragging  = false;
+    private float         mapDragLastX, mapDragLastY;
+    private boolean       worldMapKeyVisible = false;
+    private int           worldMapKeyPage    = 0;
+    private boolean       worldMapFollowing  = false;
+    private boolean       worldMapFullscreen = false;
+    private volatile String  worldmapStatus  = null;
+    // Tile coordinate origin (top-left of rendered image = tile X/Z of pixel 0,0)
+    private static final int WM_ORIGIN_X = 1856;  // westernmost tile X  (chunk 29 * 64)
+    private static final int WM_ORIGIN_Z = 1280;  // southernmost tile Z (chunk 20 * 64)
+    private static final int WM_WIDTH    = 1728;  // tiles wide  (27 chunks * 64)
+    private static final int WM_HEIGHT   = 9088;  // tiles tall (142 chunks * 64)
+    private static final int WM_REGION_SIZE  = 64;
+    private static final int WM_REGION_MIN_X = 29;
+    private static final int WM_REGION_MAX_X = 55;
+    private static final int WM_REGION_MIN_Z = 20;
+    private static final int WM_REGION_MAX_Z = 161;
+    private static final int WM_DETAIL_REGION_MIN_X = 36;
+    private static final int WM_DETAIL_REGION_MAX_X = 55;
+    private static final int WM_DETAIL_REGION_MIN_Z = 44;
+    private static final int WM_DETAIL_REGION_MAX_Z = 62;
+    private static final int WM_DEFAULT_TILE_X = 50 * WM_REGION_SIZE + WM_REGION_SIZE / 2;
+    private static final int WM_DEFAULT_TILE_Z = 50 * WM_REGION_SIZE + WM_REGION_SIZE / 2;
+
+    // Player world tile position — updated each frame by Client
+    public static volatile int playerTileX = -1;
+    public static volatile int playerTileZ = -1;
+    public static volatile int playerPlane = 0;
+
     // Native-resolution sidebar — rendered via Java2D at physical screen pixels
     private java.awt.image.BufferedImage sidebarNativeBuf;
     private java.nio.IntBuffer           sidebarNativeDirect;
@@ -242,6 +493,51 @@ public final class GLRenderer implements TriangleRenderer {
                 t.setDaemon(true);
                 return t;
             });
+    private final java.util.concurrent.ExecutorService lostHqLauncher =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "losthq-launcher");
+                t.setDaemon(true);
+                return t;
+            });
+    private volatile String lostHqStatus = "SELECT A LOSTHQ TOOL";
+    private final BufferedImage[] lostHqIcons = new BufferedImage[LOSTHQ_ITEMS.length];
+    private volatile boolean lostHqIconsLoading;
+    private volatile JEditorPane lostHqPage;
+    private volatile URI lostHqPageUri;
+    private volatile String lostHqHtml;
+    private final Set<Integer> lostHqCompletedSteps = new HashSet<>();
+    private final Object lostHqProgressLock = new Object();
+    private boolean lostHqProgressRefreshScheduled;
+    private long lostHqProgressRevision;
+    private long lostHqProgressPageId;
+    private volatile int lostHqScrollY;
+    private volatile int lostHqScrollX;
+    private boolean lostHqDragging;
+    private boolean lostHqDragMoved;
+    private int     lostHqDragLastY;
+    private int     lostHqDragLastX;
+    private int     lostHqPressX, lostHqPressY;
+    private boolean lostHqHScrollDrag;   // dragging the horizontal scrollbar thumb
+    private int     lostHqHScrollAncX;   // mouseX when thumb drag started
+    private int     lostHqHScrollAncV;   // lostHqScrollX when thumb drag started
+
+    // Native search panel (NPC DB / Item DB) ─ no JEditorPane, drawn directly
+    private record SearchEntry(int id, String name, String extra, String desc) {}
+    private volatile List<SearchEntry> lostHqNpcData;
+    private volatile List<SearchEntry> lostHqItemData;
+    private List<SearchEntry>          lostHqSearchResults = List.of();
+    private String                     lostHqSearchQuery   = "";
+    private boolean                    lostHqSearchFocused;
+    private boolean                    lostHqSearchIsNpc;  // true = NPC DB, false = Item DB
+
+    // Native skill calculator panel ─ no JEditorPane, drawn directly
+    private String  lostHqCalcSkill         = null;
+    private int     lostHqCalcFocus         = 0;  // 0=none, 1=currentXp, 2=goalLevel
+    private String  lostHqCalcCurrentXpStr  = "0";
+    private String  lostHqCalcGoalLvlStr    = "2";
+
+    // Navigation history ─ stack of URIs visited before the current page (null = main menu)
+    private final java.util.Deque<URI> lostHqHistory = new java.util.LinkedList<>();
 
     // Only intercept Pix3D calls when rendering to the main game viewport, not icon buffers.
     public static int[] viewportPixels = null;
@@ -663,8 +959,10 @@ public final class GLRenderer implements TriangleRenderer {
 
         sidebarNativeTex = glGenTextures();
         glBindTexture(GL_TEXTURE_2D, sidebarNativeTex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+        loadTabIcons();
     }
 
     private void drawUIOverlay() {
@@ -685,45 +983,54 @@ public final class GLRenderer implements TriangleRenderer {
 
         int[] fw = new int[1], fh = new int[1];
         glfwGetFramebufferSize(window, fw, fh);
-        int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+        if (worldMapFullscreen) {
+            drawWorldMapFullscreenNative(fw[0], fh[0]);
+            glUseProgram(prog);
+            updateOutputViewport();
+            return;
+        }
+        int sidebarLogW = sidebarLogicalW();
 
         if (sidebarInsideWindow()) {
-            double scale  = Math.min((double) fw[0] / (screenW + sidebarLogW),
-                                     (double) fh[0] / screenH);
+            double scale  = insideGameScale(fw[0], fh[0]);
             int gameW    = Math.max(1, (int) Math.round(screenW    * scale));
             int gameH    = Math.max(1, (int) Math.round(screenH    * scale));
-            int sidebarW = Math.max(1, (int) Math.round(sidebarLogW * scale));
-            int gameX    = sidebarOpen ? 0 : (fw[0] - gameW - sidebarW) / 2;
+            int gameX    = insideGameX(fw[0], gameW);
+            int sidebarW = insideSidebarW(fw[0], gameX, gameW, sidebarLogW, scale);
             int vertOff  = (fh[0] - gameH) / 2;
 
-            // Pass 1: game UI
             glUniform1f(uiUMinLoc, 0f);
             glUniform1f(uiUMaxLoc, (float) screenW / maxUiW);
             glViewport(gameX, vertOff, gameW, gameH);
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
-            // Pass 2: native-resolution sidebar
-            drawSidebarNative(fw[0] - sidebarW, vertOff, sidebarW, gameH, scale);
+            if (sidebarW > 0) {
+                double logicalStartX = screenW + sidebarLogW - sidebarW / scale;
+                drawSidebarNative(fw[0] - sidebarW, vertOff, sidebarW, gameH, scale, logicalStartX);
+            }
         } else {
             // Windowed 1:1 mode — compute actual DPI scale from framebuffer vs logical size
-            double scale  = (fw[0] > 0) ? (double) fw[0] / (screenW + sidebarLogW) : 1.0;
-            int gameW    = Math.max(1, (int) Math.round(screenW    * scale));
-            int gameH    = Math.max(1, (int) Math.round(screenH    * scale));
-            int sidebarW = Math.max(1, (int) Math.round(sidebarLogW * scale));
+            double scale   = (fw[0] > 0) ? (double) fw[0] / (screenW + sidebarLogW) : 1.0;
+            int gameW      = Math.max(1, (int) Math.round(screenW    * scale));
+            int gameH      = Math.max(1, (int) Math.round(screenH    * scale));
+            int sidebarW   = Math.max(1, (int) Math.round(sidebarLogW * scale));
+            // Top-align: if the window is taller than content, spare space goes below
+            int vertOff    = fh[0] - gameH;
 
             glUniform1f(uiUMinLoc, 0f);
             glUniform1f(uiUMaxLoc, (float) screenW / maxUiW);
-            glViewport(0, 0, gameW, gameH);
+            glViewport(0, vertOff, gameW, gameH);
             glDrawArrays(GL_TRIANGLES, 0, 6);
 
-            drawSidebarNative(gameW, 0, sidebarW, gameH, scale);
+            drawSidebarNative(gameW, vertOff, sidebarW, gameH, scale, screenW);
         }
 
         glUseProgram(prog);
         updateOutputViewport();
     }
 
-    private void drawSidebarNative(int physX, int physY, int physW, int physH, double scale) {
+    private void drawSidebarNative(int physX, int physY, int physW, int physH, double scale,
+                                   double logicalStartX) {
         // Reallocate Java2D buffer and GL texture storage whenever the physical size changes.
         if (physW != sidebarNativeW || physH != sidebarNativeH) {
             if (sidebarNativeBuf != null) sidebarNativeBuf.flush();
@@ -748,9 +1055,10 @@ public final class GLRenderer implements TriangleRenderer {
                                 java.awt.RenderingHints.VALUE_FRACTIONALMETRICS_ON);
             sg.setBackground(new java.awt.Color(0, 0, 0, 0));
             sg.clearRect(0, 0, physW, physH);
-            // Map logical sidebar coordinates (x origin = screenW) to physical pixels.
+            // Map the visible logical sidebar slice to physical pixels. In maximized
+            // mode the slice is clipped at the game edge instead of shrinking the game.
             sg.scale(scale, scale);
-            sg.translate(-screenW, 0);
+            sg.translate(-logicalStartX, 0);
             drawSidebar();
         } finally {
             sg.dispose();
@@ -777,15 +1085,157 @@ public final class GLRenderer implements TriangleRenderer {
         glBindTexture(GL_TEXTURE_2D, uiTex);
     }
 
+    private void drawWorldMapFullscreenNative(int physW, int physH) {
+        if (physW != sidebarNativeW || physH != sidebarNativeH) {
+            if (sidebarNativeBuf != null) sidebarNativeBuf.flush();
+            if (sidebarNativeDirect != null) MemoryUtil.memFree(sidebarNativeDirect);
+            sidebarNativeBuf = new BufferedImage(physW, physH, BufferedImage.TYPE_INT_ARGB);
+            sidebarNativeDirect = MemoryUtil.memAllocInt(physW * physH);
+            sidebarNativeW = physW;
+            sidebarNativeH = physH;
+            glBindTexture(GL_TEXTURE_2D, sidebarNativeTex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, physW, physH, 0,
+                    GL_RGBA, GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        }
+
+        sg = sidebarNativeBuf.createGraphics();
+        try {
+            sg.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING,
+                    java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            sg.setBackground(new java.awt.Color(0, 0, 0, 0));
+            sg.clearRect(0, 0, physW, physH);
+            sg.scale((double) physW / screenW, (double) physH / screenH);
+           fillUiRect(0, 0, screenW, screenH, 0xFF262626);
+           drawUiTextVerticallyCentered("WORLD MAP", 12, 11, 20, 2, 0xFFDCDCDC);
+           drawWorldMapHeaderControls(0, screenW);
+           drawSidebarHeaderCloseButton(screenW);
+            fillUiRect(0, 42, screenW, 1, 0xFF363636);
+            drawWorldMapView(0, 43, screenW, screenH - 43);
+        } finally {
+            sg.dispose();
+            sg = null;
+        }
+
+        int[] pixels = ((java.awt.image.DataBufferInt)
+                sidebarNativeBuf.getRaster().getDataBuffer()).getData();
+        sidebarNativeDirect.clear();
+        sidebarNativeDirect.put(pixels);
+        sidebarNativeDirect.flip();
+        glBindTexture(GL_TEXTURE_2D, sidebarNativeTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, physW, physH,
+                GL_BGRA, GL_UNSIGNED_BYTE, sidebarNativeDirect);
+        glUniform1f(uiUMinLoc, 0f);
+        glUniform1f(uiUMaxLoc, 1f);
+        glViewport(0, 0, physW, physH);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        glBindTexture(GL_TEXTURE_2D, uiTex);
+    }
+
+    private void loadTabIcons() {
+        String[] files = {"highscores", "floating_xp", "xp_tracker", "world_map", "guides_tools", "settings"};
+        for (int i = 0; i < files.length; i++) {
+            try (InputStream is = GLRenderer.class.getResourceAsStream("/sideicons/" + files[i] + ".png")) {
+                if (is == null) continue;
+                tabIcons[i] = ImageIO.read(is);
+            } catch (Exception e) {
+                System.err.println("[sideicons] failed to load " + files[i] + ": " + e.getMessage());
+            }
+        }
+        for (int i = 0; i < worldMapKeyPages.length; i++) {
+            try (InputStream is = GLRenderer.class.getResourceAsStream("/maps/254/key/page_" + i + ".png")) {
+                if (is != null) worldMapKeyPages[i] = ImageIO.read(is);
+            } catch (Exception e) {
+                System.err.println("[worldmap] failed to load key page " + i + ": " + e.getMessage());
+            }
+        }
+    }
+
+    private void loadWorldmapTiles() {
+        worldmapStatus = "Loading map index...";
+        try (InputStream in = getClass().getResourceAsStream("/maps/254/regions.csv")) {
+            if (in == null) throw new IllegalStateException("maps/254/regions.csv missing");
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+                String line;
+                reader.readLine(); // header
+                while ((line = reader.readLine()) != null) {
+                    String[] columns = line.split(",");
+                    if (columns.length >= 3) worldMapRegions.add(columns[1] + "_" + columns[2]);
+                }
+            }
+            for (int regionX = WM_DETAIL_REGION_MIN_X; regionX <= WM_DETAIL_REGION_MAX_X; regionX++) {
+                for (int regionZ = WM_DETAIL_REGION_MIN_Z; regionZ <= WM_DETAIL_REGION_MAX_Z; regionZ++) {
+                    worldMapRegions.add(regionX + "_" + regionZ);
+                }
+            }
+            worldMapLoaded = true;
+            mapZoom = -1;
+            worldmapStatus = null;
+            System.out.println("[worldmap] indexed " + worldMapRegions.size() + " tiled regions");
+        } catch (Exception e) {
+            worldmapStatus = "Failed: " + e.getMessage();
+            System.err.println("[worldmap] " + e);
+        }
+    }
+
+    private BufferedImage loadWorldmapTile(int plane, int regionX, int regionZ) {
+        String key = regionX + "_" + regionZ;
+        if (!worldMapRegions.contains(key)) return null;
+        Map<String, BufferedImage> cache = worldMapTiles[plane];
+        if (cache.containsKey(key)) return cache.get(key);
+
+        BufferedImage tile = null;
+        String path = "/maps/254/plane_" + plane + "/" + key + ".png";
+        try (InputStream in = getClass().getResourceAsStream(path)) {
+            if (in != null) {
+                BufferedImage source = ImageIO.read(in);
+                tile = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
+                for (int y = 0; y < source.getHeight(); y++) {
+                    for (int x = 0; x < source.getWidth(); x++) {
+                        int rgb = source.getRGB(x, y) & 0xFFFFFF;
+                        int red = rgb >> 16 & 0xFF;
+                        int green = rgb >> 8 & 0xFF;
+                        int blue = rgb & 0xFF;
+                        boolean transparentKey = red > 180 && green < 100 && blue > 180;
+                        tile.setRGB(x, y, transparentKey ? 0 : 0xFF000000 | rgb);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[worldmap] Failed to load " + path + ": " + e.getMessage());
+        }
+        cache.put(key, tile);
+        return tile;
+    }
+
+    private void drawTabIcon(int id, int cx, int cy, boolean active) {
+        BufferedImage img = id >= 0 && id < tabIcons.length ? tabIcons[id] : null;
+        if (img != null) {
+            int x = cx - TAB_ICON_SIZE / 2;
+            int y = cy - TAB_ICON_SIZE / 2;
+            java.awt.Composite prev = sg.getComposite();
+            sg.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, active ? 1.0f : 0.55f));
+            sg.drawImage(img, x, y, TAB_ICON_SIZE, TAB_ICON_SIZE, null);
+            sg.setComposite(prev);
+        } else {
+            drawIconScaled(id, cx - 4, cy - 4, 1, active ? 0xFFE89E14 : 0xFFDCDCDC);
+        }
+    }
+
     private void drawSidebar() {
         int railX  = sidebarRailX();
         int panelX = sidebarPanelX();
+        int panelW = sidebarPanelW();
         if (sidebarOpen) {
-            fillUiRect(panelX, 0, SIDEBAR_PANEL_W, screenH, 0xFF262626);
-            fillUiRect(panelX + SIDEBAR_PANEL_W - 1, 0, 1, screenH, 0xFF363636);
-            drawUiText(sidebarTitle(), panelX + 12, 17, 2, 0xFFDCDCDC);
-            drawUiText("X", panelX + SIDEBAR_PANEL_W - 18, 17, 2, 0xFF999999);
-            fillUiRect(panelX, 42, SIDEBAR_PANEL_W, 1, 0xFF363636);
+            fillUiRect(panelX, 0, panelW, screenH, 0xFF262626);
+            fillUiRect(panelX + panelW - 1, 0, 1, screenH, 0xFF363636);
+            if (sidebarTab == 3) {
+                drawUiTextVerticallyCentered(sidebarTitle(), panelX + 4, 11, 20, 0, 0xFFDCDCDC);
+            } else {
+                drawUiText(sidebarTitle(), panelX + 12, 17, 2, 0xFFDCDCDC);
+            }
+            if (sidebarTab == 3) drawWorldMapHeaderControls(panelX, panelW);
+            drawSidebarHeaderCloseButton(panelX + panelW);
+            fillUiRect(panelX, 42, panelW, 1, 0xFF363636);
             drawSidebarPanel(panelX);
         }
 
@@ -793,13 +1243,14 @@ public final class GLRenderer implements TriangleRenderer {
         fillUiRect(railX, 0, 1, screenH, 0xFF363636);
         for (int index = 0; index < SIDEBAR_TABS - 1; index++) {
             int y      = index * SIDEBAR_ROW_H;
-            boolean active = sidebarOpen && sidebarTab == index;
+            boolean active = (index == 1) ? xpScreenEnabled : (sidebarOpen && sidebarTab == index);
             if (active) {
                 fillUiRect(railX + 1, y, SIDEBAR_RAIL_W - 1, SIDEBAR_ROW_H, 0xFF3F3523);
                 fillUiRect(railX + 1, y, 3, SIDEBAR_ROW_H, 0xFFE89E14);
             }
-            // 8×8 icon at scale 1, centred in 20×34 cell
-            drawIconScaled(index, railX + 6, y + 13, 1, active ? 0xFFE89E14 : 0xFFDCDCDC);
+            int cx = railX + SIDEBAR_RAIL_W / 2;
+            int cy = y + SIDEBAR_ROW_H / 2;
+            drawTabIcon(index, cx, cy, active);
         }
         // Settings icon (tab 5) pinned to the bottom of the rail
         int settingsY      = screenH - SIDEBAR_ROW_H;
@@ -808,7 +1259,7 @@ public final class GLRenderer implements TriangleRenderer {
             fillUiRect(railX + 1, settingsY, SIDEBAR_RAIL_W - 1, SIDEBAR_ROW_H, 0xFF3F3523);
             fillUiRect(railX + 1, settingsY, 3, SIDEBAR_ROW_H, 0xFFE89E14);
         }
-        drawIconScaled(5, railX + 6, settingsY + 13, 1, settingsActive ? 0xFFE89E14 : 0xFFDCDCDC);
+        drawTabIcon(5, railX + SIDEBAR_RAIL_W / 2, settingsY + SIDEBAR_ROW_H / 2, settingsActive);
     }
 
     private void drawSidebarPanel(int x) {
@@ -828,7 +1279,7 @@ public final class GLRenderer implements TriangleRenderer {
             case 1 -> "XP SCREEN";
             case 2 -> "XP TRACKER";
             case 3 -> "WORLD MAP";
-            case 4 -> "LOSTHQ";
+            case 4 -> "Guides/Tools";
             default -> "SETTINGS";
         };
     }
@@ -841,31 +1292,35 @@ public final class GLRenderer implements TriangleRenderer {
         }
 
         // Skill selector buttons — 2 per row, 10 rows, full skill names at tiny size
+        int panelW = sidebarPanelW();
+        int columns = panelW >= 190 ? 2 : 1;
+        int buttonW = (panelW - 20 - (columns - 1) * 4) / columns;
+        int buttonRows = (HSCORE_SKILL_LABEL.length + columns - 1) / columns;
         for (int i = 0; i < HSCORE_SKILL_LABEL.length; i++) {
-            int col = i % 2;
-            int row = i / 2;
-            int bx  = x + 10 + col * 82;
+            int col = i % columns;
+            int row = i / columns;
+            int bx  = x + 10 + col * (buttonW + 4);
             int by  = 52 + row * 13;
             boolean sel = (i == hiscoresSkill);
-            fillUiRect(bx, by, 78, 11, sel ? 0xFF3F3523 : 0xFF2A2A2A);
-            if (sel) fillUiRect(bx, by, 78, 1, 0xFFE89E14);
+            fillUiRect(bx, by, buttonW, 11, sel ? 0xFF3F3523 : 0xFF2A2A2A);
+            if (sel) fillUiRect(bx, by, buttonW, 1, 0xFFE89E14);
             drawUiText(HSCORE_SKILL_LABEL[i], bx + 4, by + 2, 0, sel ? 0xFFE89E14 : 0xFF999999);
         }
 
-        int afterButtons = 52 + 10 * 13 + 3;  // y just below last button row
-        fillUiRect(x + 10, afterButtons, SIDEBAR_PANEL_W - 20, 1, 0xFF363636);
+        int afterButtons = 52 + buttonRows * 13 + 3;
+        fillUiRect(x + 10, afterButtons, panelW - 20, 1, 0xFF363636);
 
         // Column headers
         int headerY = afterButtons + 5;
         drawUiText("RK",   x + 10,  headerY, 1, 0xFF666666);
         drawUiText("NAME", x + 28,  headerY, 1, 0xFF666666);
         drawUiText("LVL",  x + 140, headerY, 1, 0xFF666666);
-        fillUiRect(x + 10, headerY + 11, SIDEBAR_PANEL_W - 20, 1, 0xFF363636);
+        fillUiRect(x + 10, headerY + 15, panelW - 20, 1, 0xFF363636);
 
         // Leaderboard rows
         String[] names  = hiscoresNames;
         int[]    levels = hiscoresLevels;
-        int rowY = headerY + 13;
+        int rowY = headerY + 18;
         if (names.length == 0) {
             String msg = hiscoresFetching ? "LOADING..." : "NO DATA";
             drawUiText(msg, x + 10, rowY, 1, 0xFF666666);
@@ -884,33 +1339,38 @@ public final class GLRenderer implements TriangleRenderer {
     }
 
     private void drawXpScreenPanel(int x) {
+        int panelW = sidebarPanelW();
         drawUiText("SHOW XP GAINS", x + 16, 56, 1, 0xFFE89E14);
-        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        fillUiRect(x + 16, 70, panelW - 32, 1, 0xFF363636);
         drawUiText("DISPLAYS FLOATING XP", x + 16, 86, 1, 0xFF999999);
         drawUiText("TEXT ON SCREEN WHEN", x + 16, 100, 1, 0xFF999999);
         drawUiText("EXPERIENCE IS GAINED.", x + 16, 114, 1, 0xFF999999);
-        fillUiRect(x + 16, 130, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        fillUiRect(x + 16, 130, panelW - 32, 1, 0xFF363636);
         drawToggleRow(x, 140, "XP ON SCREEN", xpScreenEnabled);
     }
 
     private void drawXpTrackerPanel(int x) {
-        // Reset button (top-right of panel)
-        fillUiRect(x + SIDEBAR_PANEL_W - 58, 52, 46, 16, 0xFF3A3A3A);
-        fillUiRect(x + SIDEBAR_PANEL_W - 58, 52, 46, 1, 0xFF555555);
-        fillUiRect(x + SIDEBAR_PANEL_W - 58, 67, 46, 1, 0xFF555555);
-        drawUiText("RESET", x + SIDEBAR_PANEL_W - 50, 57, 1, 0xFFDCDCDC);
-        // Column headers
-        drawUiText("SKILL", x + 16, 57, 1, 0xFF999999);
-        drawUiText("XP GAINED", x + 70, 57, 1, 0xFF999999);
-        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        int panelW = sidebarPanelW();
+        // Reset button — 4-sided border, text centred inside
+        int rbx = x + panelW - 58, rby = 52, rbw = 46, rbh = 22;
+        fillUiRect(rbx,           rby,           rbw, rbh, 0xFF3A3A3A); // background
+        fillUiRect(rbx,           rby,           rbw, 1,   0xFF666666); // top
+        fillUiRect(rbx,           rby + rbh - 1, rbw, 1,   0xFF666666); // bottom
+        fillUiRect(rbx,           rby,           1,   rbh, 0xFF666666); // left
+        fillUiRect(rbx + rbw - 1, rby,           1,   rbh, 0xFF666666); // right
+        drawUiText("RESET", rbx + 9, rby + 5, 1, 0xFFDCDCDC);
+        // Column headers sit below the reset button so narrow panels do not overlap.
+        drawUiText("SKILL",     x + 16, rby + rbh + 10, 1, 0xFF999999);
+        drawUiText("XP GAINED", x + 70, rby + rbh + 10, 1, 0xFF999999);
+        fillUiRect(x + 16, rby + rbh + 25, panelW - 32, 1, 0xFF363636);
         // Rows
         boolean hasXp = false;
         for (long v : xpSessionGains) if (v > 0) { hasXp = true; break; }
         if (!hasXp) {
-            drawUiText("NO XP GAINED", x + 16, 90,  1, 0xFF999999);
-            drawUiText("THIS SESSION.",  x + 16, 106, 1, 0xFF999999);
+            drawUiText("NO XP GAINED", x + 16, 110,  1, 0xFF999999);
+            drawUiText("THIS SESSION.",  x + 16, 126, 1, 0xFF999999);
         } else {
-            int rowY = 82;
+            int rowY = 104;
             for (int i = 0; i < SKILL_SHORT.length && rowY < screenH - 14; i++) {
                 if (xpSessionGains[i] > 0) {
                     drawUiText(SKILL_SHORT[i], x + 16, rowY, 1, 0xFFDCDCDC);
@@ -921,24 +1381,1083 @@ public final class GLRenderer implements TriangleRenderer {
         }
     }
 
-    private void drawWorldMapPanel(int x) {
-        drawUiText("WORLD MAP", x + 16, 56, 1, 0xFFE89E14);
-        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
-        drawUiText("CONNECT TO A WORLD", x + 16, 90, 1, 0xFF999999);
-        drawUiText("TO TRACK YOUR", x + 16, 106, 1, 0xFF999999);
-        drawUiText("LOCATION ON THE", x + 16, 122, 1, 0xFF999999);
-        drawUiText("WORLD MAP.", x + 16, 138, 1, 0xFF999999);
+    private int worldMapViewX() {
+        return worldMapFullscreen ? 0 : sidebarPanelX();
+    }
+
+    private int worldMapViewY() {
+        return 43;
+    }
+
+    private int worldMapViewW() {
+        return worldMapFullscreen ? screenW : sidebarPanelW();
+    }
+
+    private int worldMapViewH() {
+        return screenH - worldMapViewY();
+    }
+
+    private void zoomMapAround(float factor, int pivotX, int pivotY) {
+        float oldZoom = mapZoom;
+        mapZoom = Math.max(0.03f, Math.min(12f, mapZoom * factor));
+        float ratio = mapZoom / oldZoom;
+        float cx = pivotX - worldMapViewX();
+        float cy = pivotY - worldMapViewY();
+        mapPanX = cx - (cx - mapPanX) * ratio;
+        mapPanY = cy - (cy - mapPanY) * ratio;
+    }
+
+    private void drawWorldMapHeaderControls(int panelX, int panelW) {
+        int right = panelX + panelW;
+        int keyX = right - (worldMapFullscreen ? 75 : 129);
+        drawWorldMapHeaderButton(keyX, 11, 29, "KEY", worldMapKeyVisible);
+        if (!worldMapFullscreen) {
+            drawWorldMapHeaderButton(right - 98, 11, 52, worldMapFollowing ? "UNFOLLOW" : "FOLLOW",
+                    worldMapFollowing);
+        }
+        drawWorldMapHeaderSquareButton(right - 44, 11);
+    }
+
+    private void drawWorldMapHeaderButton(int x, int y, int width, String label, boolean active) {
+        fillUiRect(x, y, width, 20, active ? 0xFF4B3D26 : 0xFF333333);
+        fillUiRect(x, y, width, 1, active ? 0xFFE89E14 : 0xFF555555);
+        fillUiRect(x, y + 19, width, 1, 0xFF1B1B1B);
+        drawUiTextCentered(label, x, y, width, 20, 0, active ? 0xFFE89E14 : 0xFFDCDCDC);
+    }
+
+    private void drawWorldMapHeaderSquareButton(int x, int y) {
+        fillUiRect(x, y, 20, 20, 0xFF333333);
+        fillUiRect(x, y, 20, 1, 0xFF555555);
+        fillUiRect(x, y + 19, 20, 1, 0xFF1B1B1B);
+        fillUiRect(x + 5, y + 5, 10, 10, 0xFF999999);
+        fillUiRect(x + 6, y + 6, 8, 8, 0xFF262626);
+    }
+
+    private void drawSidebarHeaderCloseButton(int right) {
+        int x = right - 22;
+        int y = 11;
+        fillUiRect(x, y, 20, 20, 0xFF333333);
+        fillUiRect(x, y, 20, 1, 0xFF555555);
+        fillUiRect(x, y + 19, 20, 1, 0xFF1B1B1B);
+        drawUiTextCentered("X", x, y, 20, 20, 0, 0xFFDCDCDC);
+    }
+
+    private void centreMapOnTile(int tileX, int tileZ, int viewW, int viewH) {
+        float px = tileX - WM_ORIGIN_X;
+        float py = (WM_ORIGIN_Z + WM_HEIGHT - 1) - tileZ;
+        mapPanX = viewW / 2f - px * mapZoom;
+        mapPanY = viewH / 2f - py * mapZoom;
+    }
+
+    private void drawWorldMapKey(int vx, int vy, int vw, int vh) {
+        fillUiRect(vx, vy, vw, vh, 0xFF777777);
+        BufferedImage page = worldMapKeyPages[worldMapKeyPage];
+        if (page != null) {
+            sg.drawImage(page, vx + (vw - page.getWidth()) / 2, vy + 4, null);
+        }
+        int footerY = vy + vh - 18;
+        fillUiRect(vx, footerY, vw, 18, 0xFF262626);
+        drawUiText("<", vx + 8, footerY + 4, 1, 0xFFDCDCDC);
+        drawUiText((worldMapKeyPage + 1) + " / " + worldMapKeyPages.length, vx + vw / 2 - 12,
+                footerY + 4, 0, 0xFFDCDCDC);
+        drawUiText(">", vx + vw - 16, footerY + 4, 1, 0xFFDCDCDC);
+    }
+
+    private int worldMapKeyOverlayWidth() {
+        return 144;
+    }
+
+    private void drawWorldMapKeyOverlay(int vx, int vy, int vh) {
+        int width = worldMapKeyOverlayWidth();
+        BufferedImage page = worldMapKeyPages[worldMapKeyPage];
+        int height = Math.min(vh, (page != null ? page.getHeight() : 434) + 26);
+        fillUiRect(vx, vy, width, height, 0xFF777777);
+        if (page != null) {
+            sg.drawImage(page, vx + (width - page.getWidth()) / 2, vy + 4, null);
+        }
+        int footerY = vy + height - 18;
+        fillUiRect(vx, footerY, width, 18, 0xFF262626);
+        drawUiText("<", vx + 8, footerY + 4, 1, 0xFFDCDCDC);
+        drawUiText((worldMapKeyPage + 1) + " / " + worldMapKeyPages.length, vx + width / 2 - 12,
+                footerY + 4, 0, 0xFFDCDCDC);
+        drawUiText(">", vx + width - 16, footerY + 4, 1, 0xFFDCDCDC);
+    }
+
+    private void drawWorldMapPanel(int panelX) {
+        drawWorldMapView(panelX, 43, sidebarPanelW(), screenH - 43);
+    }
+
+    private void drawWorldMapView(int vx, int vy, int vw, int vh) {
+
+        // Trigger load on first open
+        if (!worldMapLoaded && worldmapStatus == null) {
+            loadWorldmapTiles();
+        }
+
+        // Show loading / error status
+        if (worldmapStatus != null) {
+            drawUiText(worldmapStatus, vx + 8, vy + 20, 0, 0xFF888888);
+            return;
+        }
+        if (!worldMapLoaded) return;
+
+        // First render after load: show crisp 1:1 terrain, centred on the player or mainland.
+        if (mapZoom < 0) {
+            mapZoom = 1f;
+            int centreTileX = playerTileX >= 0 ? playerTileX : WM_DEFAULT_TILE_X;
+            int centreTileZ = playerTileZ >= 0 ? playerTileZ : WM_DEFAULT_TILE_Z;
+            centreMapOnTile(centreTileX, centreTileZ, vw, vh);
+        }
+        if (worldMapFollowing && playerTileX >= 0 && playerTileZ >= 0) {
+            centreMapOnTile(playerTileX, playerTileZ, vw, vh);
+        }
+        if (worldMapKeyVisible && !worldMapFullscreen) {
+            drawWorldMapKey(vx, vy, vw, vh);
+            return;
+        }
+
+        // Clip to panel
+        java.awt.Shape prevClip = sg.getClip();
+        sg.setClip(vx, vy, vw, vh);
+
+        // Efficient src/dst rect rendering — only processes visible pixels
+        float invZ = 1f / mapZoom;
+        int sx1 = Math.max(0, (int)((-mapPanX) * invZ));
+        int sy1 = Math.max(0, (int)((-mapPanY) * invZ));
+        int sx2 = Math.min(WM_WIDTH, (int)((vw - mapPanX) * invZ) + 1);
+        int sy2 = Math.min(WM_HEIGHT, (int)((vh - mapPanY) * invZ) + 1);
+        if (sx1 < sx2 && sy1 < sy2) {
+            sg.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
+                                java.awt.RenderingHints.VALUE_RENDER_SPEED);
+            sg.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                                java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            int minRegionX = WM_REGION_MIN_X + sx1 / WM_REGION_SIZE;
+            int maxRegionX = WM_REGION_MIN_X + (sx2 - 1) / WM_REGION_SIZE;
+            int maxRegionZ = WM_REGION_MAX_Z - sy1 / WM_REGION_SIZE;
+            int minRegionZ = WM_REGION_MAX_Z - (sy2 - 1) / WM_REGION_SIZE;
+            int plane = Math.max(0, Math.min(3, playerPlane));
+            for (int regionX = minRegionX; regionX <= maxRegionX; regionX++) {
+                for (int regionZ = minRegionZ; regionZ <= maxRegionZ; regionZ++) {
+                    BufferedImage tile = loadWorldmapTile(plane, regionX, regionZ);
+                    if (tile == null) continue;
+                    int imgX = (regionX - WM_REGION_MIN_X) * WM_REGION_SIZE;
+                    int imgY = (WM_REGION_MAX_Z - regionZ) * WM_REGION_SIZE;
+                    int dx1 = vx + Math.round(mapPanX + imgX * mapZoom);
+                    int dy1 = vy + Math.round(mapPanY + imgY * mapZoom);
+                    int dx2 = vx + Math.round(mapPanX + (imgX + WM_REGION_SIZE) * mapZoom);
+                    int dy2 = vy + Math.round(mapPanY + (imgY + WM_REGION_SIZE) * mapZoom);
+                    sg.drawImage(tile, dx1, dy1, dx2 - dx1, dy2 - dy1, null);
+                }
+            }
+            sg.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
+                                java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+        }
+
+        // Player dot — tile coords scaled to image pixel space
+        if (playerTileX >= 0 && playerTileZ >= 0) {
+            float imgX = playerTileX - WM_ORIGIN_X;
+            float imgY = (WM_ORIGIN_Z + WM_HEIGHT - 1) - playerTileZ;
+            float dotX = vx + mapPanX + imgX * mapZoom;
+            float dotY = vy + mapPanY + imgY * mapZoom;
+            if (dotX >= vx && dotX < vx + vw && dotY >= vy && dotY < vy + vh) {
+                sg.setColor(new java.awt.Color(0xFF, 0xC8, 0x00));
+                sg.fillOval((int) dotX - 4, (int) dotY - 4, 8, 8);
+                sg.setColor(java.awt.Color.BLACK);
+                sg.setStroke(new java.awt.BasicStroke(1.2f));
+                sg.drawOval((int) dotX - 4, (int) dotY - 4, 8, 8);
+                sg.setStroke(new java.awt.BasicStroke(1f));
+            }
+        }
+
+        sg.setClip(prevClip);
+
+        // Zoom buttons
+        int btnX = vx + vw - 20, btnY = vy + vh - 38;
+        fillUiRect(btnX, btnY,      18, 17, 0xCC1B1B1B);
+        fillUiRect(btnX, btnY + 19, 18, 17, 0xCC1B1B1B);
+        drawUiText("+", btnX + 4, btnY + 2,      1, 0xFFDCDCDC);
+        drawUiText("-", btnX + 5, btnY + 2 + 19, 1, 0xFFDCDCDC);
+        drawUiText("PLANE " + Math.max(0, Math.min(3, playerPlane)), vx + 8, vy + vh - 18, 0, 0xFF999999);
+        if (worldMapKeyVisible && worldMapFullscreen) {
+            drawWorldMapKeyOverlay(vx + 8, vy + 4, vh - 8);
+        }
     }
 
     private void drawLostHqPanel(int x) {
-        drawUiText("LOSTHQ TOOLS", x + 16, 56, 1, 0xFFE89E14);
-        fillUiRect(x + 16, 70, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
-        for (int i = 0; i < LOSTHQ_ITEMS.length; i++) {
-            int itemY = 82 + i * 24;
-            fillUiRect(x + 12, itemY, SIDEBAR_PANEL_W - 24, 18, 0xFF1F1F1F);
-            fillUiRect(x + 12, itemY, SIDEBAR_PANEL_W - 24, 1, 0xFF363636);
-            drawUiText(LOSTHQ_ITEMS[i], x + 20, itemY + 6, 1, 0xFFDCDCDC);
+        if (lostHqPage != null || lostHqPageUri != null) {
+            if (isSearchPageUri(lostHqPageUri)) {
+                drawLostHqSearchPage(x);
+                return;
+            }
+            if (isSkillCalcUri(lostHqPageUri)) {
+                drawLostHqSkillCalcPage(x);
+                return;
+            }
+            drawLostHqPage(x);
+            return;
         }
+        loadLostHqIcons();
+        int panelW = sidebarPanelW();
+        int itemStartY = 52;
+        int iconSize   = 24;
+        int itemStep   = Math.max(42, (screenH - itemStartY - 8) / LOSTHQ_ITEMS.length);
+        for (int i = 0; i < LOSTHQ_ITEMS.length; i++) {
+            int itemY   = itemStartY + i * itemStep;
+            int centerX = x + panelW / 2;
+            boolean hovered = cursorX >= x + 4 && cursorX < x + panelW - 4
+                    && cursorY >= itemY && cursorY < itemY + itemStep;
+            BufferedImage icon = lostHqIcons[i];
+            if (icon != null) {
+                sg.drawImage(icon, centerX - iconSize / 2, itemY + 2, iconSize, iconSize, null);
+            } else {
+                fillUiRect(centerX - 6, itemY + 6, 12, 12, hovered ? 0xFFE89E14 : 0xFF555555);
+            }
+            drawUiTextCentered(LOSTHQ_ITEMS[i], x + 4, itemY + iconSize + 6,
+                    panelW - 8, 12, 0, hovered ? 0xFFE89E14 : 0xFFDCDCDC);
+        }
+    }
+
+    private void loadLostHqIcons() {
+        if (lostHqIconsLoading) return;
+        for (BufferedImage icon : lostHqIcons) if (icon != null) return;
+        lostHqIconsLoading = true;
+        lostHqLauncher.execute(() -> {
+            for (int i = 0; i < LOSTHQ_ICON_URLS.length; i++) {
+                String iconName = LOSTHQ_ICON_URLS[i].substring(LOSTHQ_ICON_URLS[i].lastIndexOf('/') + 1);
+                try (InputStream res = GLRenderer.class.getResourceAsStream("/losthq/img/" + iconName)) {
+                    if (res != null) {
+                        lostHqIcons[i] = ImageIO.read(res);
+                        continue;
+                    }
+                } catch (Exception ignored) {}
+                try {
+                    lostHqIcons[i] = ImageIO.read(new URL(LOSTHQ_ICON_URLS[i]));
+                } catch (Exception ignored) {}
+            }
+            lostHqIconsLoading = false;
+        });
+    }
+
+    private void openLostHqPage(int item) {
+        if (item < 0 || item >= LOSTHQ_URLS.length) return;
+        lostHqHistory.clear();  // fresh session from the root menu
+        openLostHqPage(URI.create(LOSTHQ_URLS[item]));
+    }
+
+    private static boolean isSearchPageUri(URI uri) {
+        if (uri == null) return false;
+        String q = uri.getRawQuery();
+        return q != null && (q.contains("p=npcdb") || q.contains("p=itemdb"));
+    }
+
+    private static boolean isSkillCalcUri(URI uri) {
+        if (uri == null) return false;
+        String q = uri.getRawQuery();
+        return q != null && q.contains("p=calculators") && q.contains("skill=");
+    }
+
+    private static String skillCalcSkillName(URI uri) {
+        String q = uri == null ? null : uri.getQuery();
+        if (q == null) return null;
+        for (String part : q.split("&")) {
+            if (part.startsWith("skill=")) return part.substring(6);
+        }
+        return null;
+    }
+
+    // Forward navigation: push current page to history, then load the new page.
+    private void openLostHqPage(URI uri) {
+        lostHqHistory.offerFirst(lostHqPageUri);
+        if (lostHqHistory.size() > 20) lostHqHistory.pollLast();
+        loadLostHqPage(uri);
+    }
+
+    // Internal loader used by both forward navigation and BACK — never touches history.
+    private void loadLostHqPage(URI uri) {
+        lostHqPage = null;
+        lostHqPageUri = uri;
+        lostHqHtml = null;
+        resetLostHqProgress();
+        lostHqScrollY = 0;
+        lostHqScrollX = 0;
+        lostHqSearchQuery = "";
+        lostHqSearchFocused = false;
+        lostHqSearchResults = List.of();
+        lostHqCalcSkill = null;
+        lostHqCalcFocus = 0;
+        lostHqStatus = null;
+        if (uri == null) {
+            lostHqStatus = "SELECT A LOSTHQ TOOL";
+            return;
+        }
+        // NPC/item DB use the native search panel — no JEditorPane needed.
+        if (isSearchPageUri(uri)) {
+            String q = uri.getRawQuery();
+            lostHqSearchIsNpc = q != null && q.contains("p=npcdb");
+            // Load data in background so the UI stays responsive.
+            lostHqLauncher.execute(() -> {
+                if (lostHqSearchIsNpc && lostHqNpcData == null)
+                    lostHqNpcData = loadSearchData("/losthq/npc_data.tsv");
+                else if (!lostHqSearchIsNpc && lostHqItemData == null)
+                    lostHqItemData = loadSearchData("/losthq/item_data.tsv");
+            });
+            return;
+        }
+        // Skill calculators use a native panel — no HTML/JS needed.
+        if (isSkillCalcUri(uri)) {
+            lostHqCalcSkill        = skillCalcSkillName(uri);
+            lostHqCalcFocus        = 0;
+            lostHqCalcCurrentXpStr = "0";
+            lostHqCalcGoalLvlStr   = "2";
+            return;
+        }
+        lostHqStatus = "LOADING PAGE...";
+        lostHqLauncher.execute(() -> {
+            try {
+                String html;
+                try {
+                    html = fetchLostHqHtml(uri);
+                } catch (Exception networkEx) {
+                    html = loadBundledHtml(uri);
+                }
+                String finalHtml = html;
+                // Use classpath base so relative image src attributes (img/...) load
+                // from the bundled JAR resources.  Link navigation still uses lostHqPageUri
+                // (the original https:// URI) via pageUri.resolve() in clickLostHqPage.
+                URL classpathBase = GLRenderer.class.getResource("/losthq/");
+                URL baseUrl = (classpathBase != null) ? classpathBase : uri.toURL();
+                SwingUtilities.invokeLater(() -> {
+                    // Disable caret — it's a read-only pane and DefaultCaret.repaintNewCaret
+                    // triggers a layout pass on the EDT that hits JDK BoxView/FlowView bugs.
+                    lostHqHtml = finalHtml;
+                    lostHqPage = createLostHqPage(decorateLostHqProgressSteps(finalHtml), baseUrl);
+                    lostHqStatus = null;
+                });
+            } catch (Exception e) {
+                lostHqPage = null;
+                lostHqPageUri = null;
+                lostHqStatus = "COULD NOT LOAD PAGE";
+            }
+        });
+    }
+
+    private String fetchLostHqHtml(URI uri) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) uri.toURL().openConnection();
+        conn.setConnectTimeout(3000);
+        conn.setReadTimeout(5000);
+        conn.setRequestProperty("User-Agent", "Progressive-Java-Client");
+        try (InputStream in = conn.getInputStream()) {
+            String html = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            html = html.replaceFirst("(?is)<body[^>]*>", "<body>");
+            html = html.replaceAll("(?is)<link[^>]*rel=\"stylesheet\"[^>]*>", "");
+            html = html.replaceAll("(?is)<script[^>]*>.*?</script>", "");
+            html = html.replaceFirst("(?is)<a href=\"/\"><img[^>]*losthq\\.png[^>]*></a>", "");
+            html = html.replaceAll("(?is)<div class=\"main-menu e\">.*?</div>", "");
+            html = html.replaceAll("(?is)<div class=\"top-border\"></div>", "");
+            html = html.replaceAll("(?is)<div class=\"left-border\"></div>", "");
+            html = html.replaceAll("(?is)<div class=\"right-border\"></div>", "");
+            html = html.replaceAll("(?is)<div class=\"bottom-border\"></div>", "");
+            html = html.replaceAll("(?is)<div style=\"text-align:center;[^>]*>.*?site-options-container.*?</div>\\s*</div>", "");
+            // Strip elements JEditorPane's CSS engine can't hide with display:none
+            html = html.replaceAll("(?is)<[^>]+id=\"scrollToTop\"[^>]*>.*?</[a-z]+>", "");
+            html = html.replaceAll("(?is)<div[^>]+class=\"[^\"]*img-modal[^\"]*\"[^>]*>.*?</div>", "");
+            html = html.replaceAll("(?is)<img[^>]+class=\"[^\"]*narrowscroll-(?:top|bottom)[^\"]*\"[^>]*>", "");
+            // Rewrite absolute /img/... paths to relative so they resolve from the classpath base
+            html = html.replaceAll("(?i)(src=[\"'])/img/", "$1img/");
+            return injectCompactCss(wrapLostHqTableCells(wrapLostHqTextNodes(normalizeTableWidths(injectXpTable(normalizeLostHqCanvases(normalizeLostHqImageWidths(html)))))));
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static String injectCompactCss(String html) {
+        // Swing's HTMLEditorKit only honours pixel (px) values for width — it ignores
+        // percentage widths and !important.  Use LOSTHQ_READER_W as the pixel reference
+        // so tables are constrained to the same width as the JEditorPane setSize() call,
+        // allowing the table layout engine to distribute column widths and wrap text.
+        int w = LOSTHQ_READER_W;
+        String compactCss = "<style>\n"
+            + "body { width: " + w + "px; margin: 0; padding: 2px 6px; background: #111; color: #ddd;"
+            + " font-family: Arial, sans-serif; font-size: 12px; line-height: 1.5; }\n"
+            + "div.body, .main-content, .main-page, .quest-container, .row,"
+            + " .stone-box, #narrowscroll, .narrowscroll-bg, .narrowscroll-bgimg,"
+            + " .narrowscroll-content { width: " + (w - 12) + "px; margin: 0; padding: 2px; display: block; }\n"
+            + ".quest-column { background: #2a2a2a; border: 1px solid #444; margin: 4px 0; padding: 4px; }\n"
+            + "img, canvas { height: auto; display: block; margin: 3px 0; }\n"
+            + "table { width: " + w + "px; margin: 3px 0; border-collapse: collapse; }\n"
+            + "td, th { padding: 2px 4px; font-size: 11px; }\n"
+            + "th { color: #ffd700; font-weight: bold; border-bottom: 1px solid #444; }\n"
+            + "tr:nth-child(even) td { background: #1a1a1a; }\n"
+            + "h1, h2, h3 { font-size: 13px; margin: 6px 0 3px; color: #ff981f; font-weight: bold; }\n"
+            + "ul { margin: 3px 0; padding-left: 14px; }\n"
+            + "a { color: #90c040; text-decoration: none; }\n"
+            + ".quest-header { color: #ff981f; font-weight: bold; }\n"
+            + ".quest-entry { margin: 1px 0; }\n"
+            + ".main-menu, #site-options-container, #scrollToTop, .img-modal { display: none; }\n"
+            + "</style>";
+        return html.replaceFirst("(?is)</head>", compactCss + "</head>");
+    }
+
+    private static String normalizeLostHqImageWidths(String html) {
+        // Swing's HTML renderer handles percentage image widths inconsistently.
+        // Keep quest-complete banners at their intended 80% reader-body width.
+        return html.replaceAll(
+                "(?i)(<img\\b[^>]*src=[\"'][^\"']*questimages/quest_complete/[^\"']*[\"'][^>]*\\bwidth=[\"'])\\d+%([\"'])",
+                "$1" + LOSTHQ_QUEST_COMPLETE_IMAGE_W + "$2");
+    }
+
+    private static String normalizeLostHqCanvases(String html) {
+        boolean skillGuidesIndex = html.contains("content=\"https://2004.losthq.rs/?p=skillguides\"");
+        boolean calculatorsIndex = html.contains("content=\"https://2004.losthq.rs/?p=calculators\"");
+        Matcher matcher = Pattern.compile("(?is)<canvas\\b([^>]*)>.*?</canvas>").matcher(html);
+        StringBuffer normalized = new StringBuffer();
+        while (matcher.find()) {
+            String attributes = matcher.group(1);
+            String itemName = lostHqAttribute(attributes, "itemname");
+            if (itemName == null) {
+                String replacement = "skillTree".equals(lostHqAttribute(attributes, "skills"))
+                        ? (calculatorsIndex ? lostHqSkillCalcGrid() : skillGuidesIndex ? lostHqSkillGuideLinks() : "")
+                        : "";
+                matcher.appendReplacement(normalized, Matcher.quoteReplacement(replacement));
+                continue;
+            }
+            String label = lostHqAttribute(attributes, "name-replace");
+            if (label == null) label = humanizeLostHqItemName(itemName);
+            String amount = lostHqAttribute(attributes, "amount");
+            if (amount != null && lostHqAttribute(attributes, "name-replace") == null) {
+                label = amount + " " + label;
+            }
+            String append = lostHqAttribute(attributes, "name-append");
+            if (append != null) label += append;
+            matcher.appendReplacement(normalized, Matcher.quoteReplacement(label));
+        }
+        matcher.appendTail(normalized);
+        return normalized.toString();
+    }
+
+    private static String lostHqSkillGuideLinks() {
+        return """
+                <div class="quest-column">
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=cooking">Cooking</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=crafting">Crafting</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=firemaking">Firemaking</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=fletching">Fletching</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=magic">Magic</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=mining">Mining</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=runecraft">Runecraft</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=smithing">Smithing</a></div>
+                <div class="quest-entry"><a href="?p=skillguides&amp;skill=woodcutting">Woodcutting</a></div>
+                </div>
+                """;
+    }
+
+    // RS2004 skill tree layout (3 columns), matching the stat panel order
+    private static final String[][] SKILL_CALC_GRID = {
+        {"attack",   "hitpoints", "mining"},
+        {"strength", "agility",   "smithing"},
+        {"defence",  "herblore",  "fishing"},
+        {"ranged",   "thieving",  "cooking"},
+        {"prayer",   "crafting",  "firemaking"},
+        {"magic",    "fletching", "woodcutting"},
+        {"runecrafting", null,    null}
+    };
+
+    private static String lostHqSkillCalcGrid() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<table style='border-collapse:collapse;margin:4px 0;'>");
+        for (String[] row : SKILL_CALC_GRID) {
+            sb.append("<tr>");
+            for (String skill : row) {
+                sb.append("<td style='padding:3px;text-align:center;'>");
+                if (skill != null) {
+                    java.net.URL iconUrl = GLRenderer.class.getResource("/skillicons/" + skill + ".png");
+                    sb.append("<a href='?p=calculators&amp;skill=").append(skill).append("'>");
+                    if (iconUrl != null) {
+                        sb.append("<img src='").append(iconUrl)
+                          .append("' width='32' height='32' alt='").append(skill).append("'>");
+                    } else {
+                        String label = Character.toUpperCase(skill.charAt(0)) + skill.substring(1);
+                        sb.append(label);
+                    }
+                    sb.append("</a>");
+                }
+                sb.append("</td>");
+            }
+            sb.append("</tr>");
+        }
+        sb.append("</table>");
+        return sb.toString();
+    }
+
+    private static String injectXpTable(String html) {
+        if (!html.contains("xp-table")) return html;
+        return html.replaceFirst("(?i)<div[^>]+class=[\"']xp-table[\"'][^>]*>\\s*</div>",
+                Matcher.quoteReplacement(buildXpTableHtml()));
+    }
+
+    private static String buildXpTableHtml() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<br><table><tr><th>Level</th><th>XP Required</th><th>Level</th><th>XP Required</th></tr>");
+        for (int level = 2; level <= 50; level++) {
+            int paired = level + 49;
+            sb.append("<tr><td>").append(level).append("</td><td>")
+              .append(String.format("%,d", XP_TABLE[level])).append("</td><td>")
+              .append(paired).append("</td><td>")
+              .append(String.format("%,d", XP_TABLE[paired])).append("</td></tr>");
+        }
+        sb.append("</table>");
+        return sb.toString();
+    }
+
+    private static String lostHqAttribute(String attributes, String name) {
+        Matcher matcher = Pattern.compile("(?i)\\b" + Pattern.quote(name)
+                + "\\s*=\\s*([\"'])(.*?)\\1").matcher(attributes);
+        return matcher.find() ? matcher.group(2) : null;
+    }
+
+    private static String humanizeLostHqItemName(String itemName) {
+        String label = itemName.replace('_', ' ').trim();
+        if (label.isEmpty()) return "";
+        return Character.toUpperCase(label.charAt(0)) + label.substring(1);
+    }
+
+    private String decorateLostHqProgressSteps(String html) {
+        Set<Integer> completedSteps;
+        synchronized (lostHqProgressLock) {
+            completedSteps = new HashSet<>(lostHqCompletedSteps);
+        }
+        Matcher matcher = Pattern.compile(
+                "(?is)<div\\s+data-progress(?:\\s*=\\s*(?:\"[^\"]*\"|'[^']*'|[^\\s>]+))?\\s*>(.*?)</div>")
+                .matcher(html);
+        StringBuffer decorated = new StringBuffer();
+        int step = 0;
+        while (matcher.find()) {
+            boolean checked = completedSteps.contains(step);
+            String content = matcher.group(1);
+            String replacement = "<div><a href=\"progress:" + step + "\">"
+                    + (checked ? "[x]" : "[ ]") + "</a> "
+                    + (checked ? "<strike>" + content + "</strike>" : content)
+                    + "</div>";
+            matcher.appendReplacement(decorated, Matcher.quoteReplacement(replacement));
+            step++;
+        }
+        matcher.appendTail(decorated);
+        return decorated.toString();
+    }
+
+    private void toggleLostHqProgressStep(String href) {
+        JEditorPane page = lostHqPage;
+        if (lostHqHtml == null || page == null) return;
+        try {
+            int step = Integer.parseInt(href.substring("progress:".length()));
+            long pageId;
+            synchronized (lostHqProgressLock) {
+                if (!lostHqCompletedSteps.add(step)) lostHqCompletedSteps.remove(step);
+                lostHqProgressRevision++;
+                if (lostHqProgressRefreshScheduled) return;
+                lostHqProgressRefreshScheduled = true;
+                pageId = lostHqProgressPageId;
+            }
+            scheduleLostHqProgressRefresh(page, pageId);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void scheduleLostHqProgressRefresh(JEditorPane page, long pageId) {
+        SwingUtilities.invokeLater(() -> {
+            String html = lostHqHtml;
+            long renderedRevision;
+            synchronized (lostHqProgressLock) {
+                if (pageId != lostHqProgressPageId || page != lostHqPage || html == null) return;
+                renderedRevision = lostHqProgressRevision;
+            }
+            JEditorPane refreshedPage = page;
+            try {
+                HTMLDocument currentDoc = (HTMLDocument) page.getDocument();
+                JEditorPane replacement = createLostHqPage(
+                        decorateLostHqProgressSteps(html), currentDoc.getBase());
+                synchronized (lostHqProgressLock) {
+                    if (pageId != lostHqProgressPageId || page != lostHqPage) return;
+                    lostHqPage = replacement;
+                    refreshedPage = replacement;
+                }
+            } catch (RuntimeException ignored) {
+                // JDK HTML layout bugs should not leave the refresh gate locked.
+            }
+
+            boolean refreshAgain = false;
+            synchronized (lostHqProgressLock) {
+                if (pageId != lostHqProgressPageId || refreshedPage != lostHqPage) return;
+                lostHqProgressRefreshScheduled = false;
+                if (renderedRevision != lostHqProgressRevision) {
+                    lostHqProgressRefreshScheduled = true;
+                    refreshAgain = true;
+                }
+            }
+            if (refreshAgain) scheduleLostHqProgressRefresh(refreshedPage, pageId);
+        });
+    }
+
+    private static JEditorPane createLostHqPage(String html, URL baseUrl) {
+        JEditorPane page = new JEditorPane();
+        page.setEditable(false);
+        // Disable caret: this read-only pane does not need caret repaint layout passes.
+        DefaultCaret silentCaret = new DefaultCaret();
+        silentCaret.setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
+        page.setCaret(silentCaret);
+        HTMLEditorKit kit = new HTMLEditorKit();
+        HTMLDocument doc = (HTMLDocument) kit.createDefaultDocument();
+        doc.setAsynchronousLoadPriority(-1);
+        doc.setBase(baseUrl);
+        doc.putProperty("IgnoreCharsetDirective", Boolean.TRUE);
+        page.setEditorKit(kit);
+        page.setDocument(doc);
+        page.setText(html);
+        page.setSize(LOSTHQ_READER_W, Short.MAX_VALUE);
+        return page;
+    }
+
+    private void resetLostHqProgress() {
+        synchronized (lostHqProgressLock) {
+            lostHqCompletedSteps.clear();
+            lostHqProgressRevision++;
+            lostHqProgressPageId++;
+            lostHqProgressRefreshScheduled = false;
+        }
+    }
+
+    private static String wrapLostHqTextNodes(String html) {
+        int body = html.toLowerCase().indexOf("<body");
+        int bodyEnd = body < 0 ? -1 : html.indexOf('>', body);
+        if (bodyEnd < 0) return html;
+        String head = html.substring(0, bodyEnd + 1);
+        Matcher matcher = Pattern.compile(">([^<]+)<").matcher(html.substring(bodyEnd + 1));
+        StringBuffer wrapped = new StringBuffer();
+        while (matcher.find()) {
+            matcher.appendReplacement(wrapped, Matcher.quoteReplacement(">"
+                    + wrapLostHqTextNode(matcher.group(1)) + "<"));
+        }
+        matcher.appendTail(wrapped);
+        return head + wrapped;
+    }
+
+    private static String wrapLostHqTextNode(String text) {
+        return wrapLostHqTextNode(text, 36);
+    }
+
+    private static String wrapLostHqTextNode(String text, int wrapCol) {
+        String normalized = text.replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty()) return text;
+        boolean leadingSpace = Character.isWhitespace(text.charAt(0));
+        boolean trailingSpace = Character.isWhitespace(text.charAt(text.length() - 1));
+        StringBuilder wrapped = new StringBuilder();
+        if (leadingSpace) wrapped.append(normalized.length() > 28 ? "<br>" : " ");
+        int column = 0;
+        for (String word : normalized.split(" ")) {
+            if (column > 0 && column + 1 + word.length() > wrapCol) {
+                wrapped.append("<br>");
+                column = 0;
+            } else if (column > 0) {
+                wrapped.append(' ');
+                column++;
+            }
+            wrapped.append(word);
+            column += word.length();
+        }
+        if (trailingSpace) wrapped.append(' ');
+        return wrapped.toString();
+    }
+
+    // Adds width="100%" HTML attribute to <table> elements that lack one.
+    // Swing's HTMLEditorKit respects HTML width attributes on tables but ignores CSS
+    // percentage widths, so this is the only reliable way to constrain table layout.
+    private static String normalizeTableWidths(String html) {
+        return html.replaceAll("(?i)<table(?![^>]*\\bwidth=)([^>]*)>", "<table width=\"100%\"$1>");
+    }
+
+    // Rewraps text nodes inside <td>/<th> cells at a column-proportional width.
+    // Swing's table layout uses natural content width and won't wrap text in cells
+    // unless <br> tags are present, so long location strings in multi-column tables
+    // would otherwise overflow the panel horizontally.
+    private static String wrapLostHqTableCells(String html) {
+        Matcher tableMatcher = Pattern.compile(
+                "(?is)(<table\\b[^>]*>)(.*?)(</table\\s*>)").matcher(html);
+        StringBuffer out = new StringBuffer();
+        while (tableMatcher.find()) {
+            String tableBody = tableMatcher.group(2);
+            int cols = countFirstRowColumns(tableBody);
+            // Approximate chars per line that fit in an equal-width column at 11px Arial.
+            // Body content width ≈ 292px; each char ≈ 6px.
+            int wrapCol = Math.max(10, 292 / cols / 6);
+            String wrappedBody = rewrapTableCellText(tableBody, wrapCol);
+            tableMatcher.appendReplacement(out, Matcher.quoteReplacement(
+                    tableMatcher.group(1) + wrappedBody + tableMatcher.group(3)));
+        }
+        tableMatcher.appendTail(out);
+        return out.toString();
+    }
+
+    private static int countFirstRowColumns(String tableBody) {
+        Matcher rowMatcher = Pattern.compile("(?is)<tr\\b[^>]*>(.*?)</tr\\s*>").matcher(tableBody);
+        if (!rowMatcher.find()) return 1;
+        Matcher cellMatcher = Pattern.compile("(?i)<t[dh]\\b").matcher(rowMatcher.group(1));
+        int count = 0;
+        while (cellMatcher.find()) count++;
+        return count > 0 ? count : 1;
+    }
+
+    private static String rewrapTableCellText(String tableBody, int wrapCol) {
+        Matcher cellMatcher = Pattern.compile(
+                "(?is)(<t[dh]\\b[^>]*>)(.*?)(</t[dh]\\s*>)").matcher(tableBody);
+        StringBuffer sb = new StringBuffer();
+        while (cellMatcher.find()) {
+            String rewrapped = rewrapTextNodes(cellMatcher.group(2), wrapCol);
+            cellMatcher.appendReplacement(sb, Matcher.quoteReplacement(
+                    cellMatcher.group(1) + rewrapped + cellMatcher.group(3)));
+        }
+        cellMatcher.appendTail(sb);
+        return sb.toString();
+    }
+
+    private static String rewrapTextNodes(String html, int wrapCol) {
+        Matcher m = Pattern.compile(">([^<]+)<").matcher(html);
+        StringBuffer sb = new StringBuffer();
+        while (m.find()) {
+            m.appendReplacement(sb, Matcher.quoteReplacement(
+                    ">" + wrapLostHqTextNode(m.group(1), wrapCol) + "<"));
+        }
+        m.appendTail(sb);
+        return sb.toString();
+    }
+
+    /** Mirrors the Python scraper's uri_to_filename — must stay in sync with cache/scrape_losthq.py. */
+    private static String uriToResourceFilename(URI uri) {
+        String query = uri.getQuery();
+        if (query == null || query.isEmpty()) return "index.html";
+        TreeMap<String, List<String>> params = new TreeMap<>();
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            String k = eq >= 0 ? pair.substring(0, eq) : pair;
+            String v = eq >= 0 ? pair.substring(eq + 1) : "";
+            params.computeIfAbsent(k, x -> new ArrayList<>()).add(v);
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, List<String>> e : params.entrySet()) {
+            for (String val : e.getValue()) {
+                if (sb.length() > 0) sb.append('_');
+                sb.append(e.getKey()).append('_').append(val.replaceAll("[^a-zA-Z0-9_-]", "_"));
+            }
+        }
+        return sb + ".html";
+    }
+
+    private String loadBundledHtml(URI uri) throws Exception {
+        String filename = uriToResourceFilename(uri);
+        InputStream in = GLRenderer.class.getResourceAsStream("/losthq/" + filename);
+        if (in == null) throw new FileNotFoundException("No bundled page: " + filename);
+        try (in) {
+            String html = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            // Older scraped resources contain a fixed-width reader stylesheet.
+            // Remove it before injecting the responsive CSS so Swing does not
+            // keep laying out narrow maximized panels at the legacy 312px width.
+            html = html.replaceFirst("(?is)<style>.*?</style>", "");
+            return injectCompactCss(wrapLostHqTableCells(wrapLostHqTextNodes(normalizeTableWidths(injectXpTable(normalizeLostHqCanvases(normalizeLostHqImageWidths(html)))))));
+        }
+    }
+
+    private static List<SearchEntry> loadSearchData(String resource) {
+        try (InputStream in = GLRenderer.class.getResourceAsStream(resource)) {
+            if (in == null) return List.of();
+            String[] lines = new String(in.readAllBytes(), StandardCharsets.UTF_8).split("\\r?\\n");
+            List<SearchEntry> out = new ArrayList<>();
+            for (int i = 1; i < lines.length; i++) {
+                String[] c = lines[i].split("\t", 4);
+                if (c.length < 2) continue;
+                int id = -1;
+                try { id = Integer.parseInt(c[0].trim()); } catch (NumberFormatException ignored) {}
+                out.add(new SearchEntry(id, c[1],
+                        c.length > 2 ? c[2] : "",
+                        c.length > 3 ? c[3] : ""));
+            }
+            return out;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private void updateLostHqSearch() {
+        List<SearchEntry> data = lostHqSearchIsNpc ? lostHqNpcData : lostHqItemData;
+        if (data == null) { lostHqSearchResults = List.of(); return; }
+        String q = lostHqSearchQuery.toLowerCase().trim();
+        if (q.isEmpty()) { lostHqSearchResults = List.of(); return; }
+        List<SearchEntry> results = new ArrayList<>();
+        // Exact ID match first
+        try {
+            int id = Integer.parseInt(q);
+            for (SearchEntry e : data) if (e.id() == id) { results.add(e); break; }
+        } catch (NumberFormatException ignored) {}
+        // Name/description substring matches
+        for (SearchEntry e : data) {
+            if (results.size() >= 20) break;
+            if (!results.contains(e) && e.name().toLowerCase().contains(q))
+                results.add(e);
+        }
+        lostHqSearchResults = results;
+    }
+
+    private static final int SEARCH_ROW_H = 28;
+
+    private void drawLostHqSearchPage(int x) {
+        int panelW = sidebarPanelW();
+        int pageW  = panelW - 8;
+
+        // BACK button (same position as the HTML page back button)
+        fillUiRect(x + 4, 48, pageW, 18, 0xFF333333);
+        drawUiTextCentered("<  BACK", x + 4, 48, pageW, 18, 1, 0xFFE89E14);
+
+        // Search box
+        int sbY = 70;
+        boolean focused = lostHqSearchFocused;
+        fillUiRect(x + 4, sbY, pageW, 20, focused ? 0xFF2A2A3A : 0xFF1E1E2A);
+        fillUiRect(x + 4, sbY, 2, 20, 0xFF4477CC);
+        String cursor = focused && (System.currentTimeMillis() / 500 % 2 == 0) ? "_" : "";
+        String display = lostHqSearchQuery.isEmpty() && !focused
+                ? "Search by name or ID..."
+                : lostHqSearchQuery + cursor;
+        int textColor = lostHqSearchQuery.isEmpty() && !focused ? 0xFF555566 : 0xFFDDDDEE;
+        drawUiText(display, x + 10, sbY + 3, 1, textColor);
+
+        // Loading indicator
+        List<SearchEntry> data = lostHqSearchIsNpc ? lostHqNpcData : lostHqItemData;
+        int resultsY = sbY + 24;
+        if (data == null) {
+            drawUiText("Loading data...", x + 8, resultsY + 4, 1, 0xFF777777);
+            return;
+        }
+
+        // Hint / results
+        if (lostHqSearchQuery.isEmpty()) {
+            String hint = "Search " + (lostHqSearchIsNpc ? "1,284 NPCs" : "3,883 items")
+                    + " by name or ID number.";
+            drawUiText(hint, x + 8, resultsY + 4, 0, 0xFF666677);
+            return;
+        }
+        if (lostHqSearchResults.isEmpty()) {
+            drawUiText("No matches for: " + lostHqSearchQuery, x + 8, resultsY + 4, 1, 0xFF666677);
+            return;
+        }
+
+        int ry = resultsY;
+        for (SearchEntry e : lostHqSearchResults) {
+            if (ry + SEARCH_ROW_H > screenH) break;
+            fillUiRect(x + 4, ry, pageW, SEARCH_ROW_H - 2, 0xFF1C1C28);
+            // ID badge
+            String idStr = "[" + e.id() + "]";
+            drawUiText(idStr, x + 8, ry + 2, 0, 0xFF4477CC);
+            // Name
+            int nameX = x + 8 + sg.getFontMetrics(uiFont(0)).stringWidth(idStr) + 4;
+            drawUiText(e.name(), nameX, ry + 2, 1, 0xFFE89E14);
+            // Extra (level/HP or Members)
+            if (!e.extra().isEmpty()) {
+                drawUiText(e.extra(), x + panelW - 8 - sg.getFontMetrics(uiFont(0)).stringWidth(e.extra()),
+                        ry + 2, 0, 0xFF888899);
+            }
+            // Description
+            if (!e.desc().isEmpty()) {
+                String desc = e.desc();
+                if (sg.getFontMetrics(uiFont(0)).stringWidth(desc) > pageW - 8)
+                    desc = e.desc().substring(0, Math.min(e.desc().length(),
+                            (pageW - 8) / 6)) + "…";
+                drawUiText(desc, x + 8, ry + 15, 0, 0xFF888899);
+            }
+            ry += SEARCH_ROW_H;
+        }
+    }
+
+    private static int xpToLevel(int xp) {
+        for (int level = 98; level >= 1; level--) {
+            if (xp >= XP_TABLE[level + 1]) return level + 1;
+        }
+        return 1;
+    }
+
+    private void drawLostHqSkillCalcPage(int x) {
+        int panelW = sidebarPanelW();
+        int pageW  = panelW - 8;
+
+        // BACK button
+        fillUiRect(x + 4, 48, pageW, 18, 0xFF333333);
+        drawUiTextCentered("<  BACK", x + 4, 48, pageW, 18, 1, 0xFFE89E14);
+
+        // Title
+        String skill = lostHqCalcSkill != null ? lostHqCalcSkill : "skill";
+        String title = Character.toUpperCase(skill.charAt(0)) + skill.substring(1) + " Calculator";
+        drawUiTextCentered(title, x + 4, 70, pageW, 16, 2, 0xFFE89E14);
+
+        int currentXp    = 0;
+        int goalLevel    = 2;
+        try { currentXp = Math.max(0, Integer.parseInt(lostHqCalcCurrentXpStr)); } catch (NumberFormatException ignored) {}
+        try { goalLevel  = Math.max(1, Math.min(99, Integer.parseInt(lostHqCalcGoalLvlStr))); } catch (NumberFormatException ignored) {}
+        int currentLevel = xpToLevel(currentXp);
+        int goalXp       = XP_TABLE[goalLevel];
+
+        int labelW = 82;
+        int inputH = 20;
+
+        // --- Current XP row ---
+        int row1Y = 96;
+        drawUiTextVerticallyCentered("Current XP:", x + 6, row1Y, inputH, 1, 0xFFAAAAAA);
+        boolean f1 = lostHqCalcFocus == 1;
+        fillUiRect(x + 6 + labelW, row1Y, pageW - labelW - 2, inputH, f1 ? 0xFF2A2A3A : 0xFF1E1E2A);
+        fillUiRect(x + 6 + labelW, row1Y, 2, inputH, f1 ? 0xFFE89E14 : 0xFF4477CC);
+        String cursor1 = f1 && (System.currentTimeMillis() / 500 % 2 == 0) ? "_" : "";
+        drawUiTextVerticallyCentered(lostHqCalcCurrentXpStr + cursor1,
+                x + 10 + labelW, row1Y, inputH, 1, 0xFFDDDDEE);
+
+        // Current Level (auto)
+        int row2Y = row1Y + 24;
+        drawUiTextVerticallyCentered("Current Level: " + currentLevel,
+                x + 6, row2Y, inputH, 1, 0xFF888899);
+
+        // --- Goal Level row ---
+        int row3Y = row2Y + 26;
+        drawUiTextVerticallyCentered("Goal Level:", x + 6, row3Y, inputH, 1, 0xFFAAAAAA);
+        boolean f2 = lostHqCalcFocus == 2;
+        int halfW = (pageW - labelW - 4) / 2;
+        fillUiRect(x + 6 + labelW, row3Y, halfW, inputH, f2 ? 0xFF2A2A3A : 0xFF1E1E2A);
+        fillUiRect(x + 6 + labelW, row3Y, 2, inputH, f2 ? 0xFFE89E14 : 0xFF4477CC);
+        String cursor2 = f2 && (System.currentTimeMillis() / 500 % 2 == 0) ? "_" : "";
+        drawUiTextVerticallyCentered(lostHqCalcGoalLvlStr + cursor2,
+                x + 10 + labelW, row3Y, inputH, 1, 0xFFDDDDEE);
+
+        // Goal XP (auto, right side of same row)
+        int gxpX = x + 6 + labelW + halfW + 4;
+        drawUiTextVerticallyCentered("Goal XP:", gxpX, row3Y, inputH, 0, 0xFFAAAAAA);
+        int gxpLabelW = sg.getFontMetrics(uiFont(0)).stringWidth("Goal XP: ");
+        drawUiTextVerticallyCentered(String.format("%,d", goalXp),
+                gxpX + gxpLabelW, row3Y, inputH, 0, 0xFFDDDDEE);
+
+        // --- Separator ---
+        int sepY = row3Y + 26;
+        fillUiRect(x + 4, sepY, pageW, 1, 0xFF444444);
+
+        // --- Results ---
+        int resY = sepY + 8;
+        drawUiTextCentered("Progress to Goal:", x + 4, resY, pageW, 14, 1, 0xFFE89E14);
+
+        // Two stat boxes
+        int boxY = resY + 18;
+        int boxW = (pageW - 6) / 2;
+        int boxH = 28;
+
+        double pctToGoal = goalXp > 0 ? Math.min(100.0, currentXp * 100.0 / goalXp) : 100.0;
+        double pctTo99   = XP_TABLE[99] > 0 ? Math.min(100.0, currentXp * 100.0 / XP_TABLE[99]) : 100.0;
+
+        // Left box: % toward goal
+        fillUiRect(x + 4, boxY, boxW, boxH, 0xFF1C1C28);
+        String leftPct = String.format("%.2f%% from level %d", pctToGoal, currentLevel);
+        drawUiTextCentered(leftPct, x + 4, boxY, boxW, boxH, 0, 0xFFDDDDEE);
+
+        // Right box: % toward 99
+        fillUiRect(x + 6 + boxW, boxY, boxW, boxH, 0xFF1C1C28);
+        String rightPct = String.format("%.2f%% to level 99", pctTo99);
+        drawUiTextCentered(rightPct, x + 6 + boxW, boxY, boxW, boxH, 0, 0xFFDDDDEE);
+
+        // XP needed line
+        int xpNeeded = Math.max(0, goalXp - currentXp);
+        int xpY = boxY + boxH + 8;
+        String neededStr = currentXp >= goalXp
+                ? "Goal reached! (level " + currentLevel + ")"
+                : String.format("%,d XP needed to reach level %d", xpNeeded, goalLevel);
+        drawUiTextCentered(neededStr, x + 4, xpY, pageW, 14, 1, 0xFFDDDDEE);
+
+        // --- Training unlocks table ---
+        String[][] unlocks = SKILL_UNLOCKS.get(skill);
+        if (unlocks == null || unlocks.length == 0) return;
+
+        int tableStartY = xpY + 22;
+        fillUiRect(x + 4, tableStartY - 1, pageW, 1, 0xFF444444);
+
+        // Column header
+        int headerY = tableStartY + 4;
+        drawUiText("Item / Activity", x + 8, headerY, 1, 0xFFE89E14);
+        String lvlHdr = "Level";
+        int lvlHdrW = sg.getFontMetrics(uiFont(1)).stringWidth(lvlHdr);
+        drawUiText(lvlHdr, x + 4 + pageW - lvlHdrW - 4, headerY, 1, 0xFFE89E14);
+        fillUiRect(x + 4, headerY + 14, pageW, 1, 0xFF333333);
+
+        int rowH = 18;
+        int firstRowY = headerY + 18;
+
+        // Clipping region for scrollable rows
+        java.awt.Shape oldClip = sg.getClip();
+        sg.clipRect(x + 4, firstRowY, pageW, screenH - firstRowY);
+
+        int rowY = firstRowY - lostHqScrollY;
+        for (int i = 0; i < unlocks.length; i++) {
+            if (rowY + rowH > 0 && rowY < screenH) {
+                if (i % 2 == 1) fillUiRect(x + 4, rowY, pageW, rowH, 0xFF1A1A1A);
+                drawUiTextVerticallyCentered(unlocks[i][0], x + 8, rowY, rowH, 0, 0xFFDDDDEE);
+                String lvlStr = unlocks[i][1];
+                int lvlW = sg.getFontMetrics(uiFont(0)).stringWidth(lvlStr);
+                drawUiTextVerticallyCentered(lvlStr, x + 4 + pageW - lvlW - 6, rowY, rowH, 0, 0xFF90C040);
+            }
+            rowY += rowH;
+        }
+        int maxScroll = Math.max(0, unlocks.length * rowH - (screenH - firstRowY));
+        lostHqScrollY = Math.max(0, Math.min(maxScroll, lostHqScrollY));
+
+        sg.setClip(oldClip);
+    }
+
+    private void drawLostHqPage(int x) {
+        int pageY = 70;
+        int panelW = sidebarPanelW();
+        int pageW = panelW - 8;
+        int pageH = screenH - pageY - HSCROLL_H; // reserve bottom strip for scrollbar
+        double readerScale = lostHqReaderScale();
+        int readerVisibleH = Math.max(1, (int) Math.ceil(pageH / readerScale));
+        int readerVisibleW = Math.max(1, (int) Math.ceil(pageW / readerScale));
+        fillUiRect(x + 4, 48, pageW, 18, 0xFF333333);
+        drawUiTextCentered("<  BACK", x + 4, 48, pageW, 18, 1, 0xFFE89E14);
+        JEditorPane page = lostHqPage;
+        if (page == null || lostHqStatus != null) {
+            drawUiText(lostHqStatus, x + 10, pageY + 12, 0, 0xFF999999);
+            fillUiRect(x + 4, screenH - HSCROLL_H, pageW, HSCROLL_H, 0xFF1A1A1A);
+            return;
+        }
+        // Track measured content width for scrollbar sizing; default to body width.
+        int contentW = LOSTHQ_READER_W;
+        java.awt.Graphics2D pageGraphics = (java.awt.Graphics2D) sg.create();
+        try {
+            synchronized (page.getTreeLock()) {
+                pageGraphics.clipRect(x + 4, pageY, pageW, pageH);
+                pageGraphics.translate(x + 4, pageY);
+                pageGraphics.scale(readerScale, readerScale);
+                pageGraphics.translate(-lostHqScrollX, -lostHqScrollY);
+                // Render at wider canvas so overflowing table cells aren't clipped.
+                page.setSize(LOSTHQ_READER_WIDE, Short.MAX_VALUE);
+                page.setSize(LOSTHQ_READER_WIDE, Math.max(readerVisibleH, page.getPreferredSize().height));
+                int pw = page.getPreferredSize().width;
+                if (pw > LOSTHQ_READER_W) contentW = Math.min(pw, LOSTHQ_READER_WIDE);
+                page.paint(pageGraphics);
+            }
+        } catch (RuntimeException ignored) {
+            // JDK BoxView/TableView/FlowView bugs: skip this frame rather than crash
+        } finally {
+            pageGraphics.dispose();
+        }
+        // Horizontal scrollbar
+        int sbX = x + 4;
+        int sbY = screenH - HSCROLL_H;
+        int maxScrollX = Math.max(0, contentW - readerVisibleW);
+        fillUiRect(sbX, sbY, pageW, HSCROLL_H, 0xFF1A1A1A);
+        int thumbW = Math.max(20, pageW * readerVisibleW / Math.max(1, contentW));
+        int trackRange = Math.max(1, pageW - thumbW);
+        int thumbOff = maxScrollX > 0 ? (int) Math.min(trackRange, (long) lostHqScrollX * trackRange / maxScrollX) : 0;
+        boolean hoverSb = cursorY >= sbY && isSidebarX(cursorX);
+        int thumbCol = lostHqHScrollDrag ? 0xFF888888 : (hoverSb ? 0xFF666666 : 0xFF444444);
+        fillUiRect(sbX + thumbOff, sbY + 2, thumbW, HSCROLL_H - 4, thumbCol);
     }
 
     private void drawSettingsPanel(int x) {
@@ -954,7 +2473,7 @@ public final class GLRenderer implements TriangleRenderer {
     private void drawPluginRow(int x, int y, String name, String description, boolean enabled) {
         drawUiText(name, x + 16, y, 2, 0xFFDCDCDC);
         drawUiText(description, x + 16, y + 20, 1, 0xFF999999);
-        drawToggle(x + SIDEBAR_PANEL_W - 48, y + 2, enabled);
+        drawToggle(x + sidebarPanelW() - 48, y + 2, enabled);
     }
 
     private void fetchHiscores(int skill) {
@@ -1023,9 +2542,10 @@ public final class GLRenderer implements TriangleRenderer {
     }
 
     private void drawToggleRow(int x, int y, String text, boolean enabled) {
+        int panelW = sidebarPanelW();
         drawUiText(text, x + 16, y + 16, 1, 0xFFDCDCDC);
-        drawToggle(x + SIDEBAR_PANEL_W - 48, y + 9, enabled);
-        fillUiRect(x + 16, y + 42, SIDEBAR_PANEL_W - 32, 1, 0xFF363636);
+        drawToggle(x + panelW - 48, y + 9, enabled);
+        fillUiRect(x + 16, y + 42, panelW - 32, 1, 0xFF363636);
     }
 
     private void drawMetric(int x, int y, String name, String value) {
@@ -1087,13 +2607,31 @@ public final class GLRenderer implements TriangleRenderer {
 
     private void drawUiText(String text, int x, int y, int scale, int argb) {
         if (text == null || text.isEmpty()) return;
-        java.awt.Font font = (scale >= 2) ? UI_FONT_HEAD : (scale == 0) ? UI_FONT_TINY : UI_FONT_BODY;
+        java.awt.Font font = uiFont(scale);
         sg.setFont(font);
         java.awt.FontMetrics fm = sg.getFontMetrics(font);
         int a = (argb >> 24) & 0xFF, r = (argb >> 16) & 0xFF,
             g = (argb >> 8)  & 0xFF, b =  argb        & 0xFF;
         sg.setColor(new java.awt.Color(r, g, b, a));
         sg.drawString(text, x, y + fm.getAscent());
+    }
+
+    private java.awt.Font uiFont(int scale) {
+        return (scale >= 2) ? UI_FONT_HEAD : (scale == 0) ? UI_FONT_TINY : UI_FONT_BODY;
+    }
+
+    private void drawUiTextCentered(String text, int x, int y, int width, int height, int scale,
+                                    int argb) {
+        java.awt.FontMetrics fm = sg.getFontMetrics(uiFont(scale));
+        int textX = x + (width - fm.stringWidth(text)) / 2;
+        int textY = y + (height - fm.getHeight()) / 2;
+        drawUiText(text, textX, textY, scale, argb);
+    }
+
+    private void drawUiTextVerticallyCentered(String text, int x, int y, int height, int scale,
+                                              int argb) {
+        java.awt.FontMetrics fm = sg.getFontMetrics(uiFont(scale));
+        drawUiText(text, x, y + (height - fm.getHeight()) / 2, scale, argb);
     }
 
     private void updateMetrics() {
@@ -1217,10 +2755,47 @@ public final class GLRenderer implements TriangleRenderer {
         glfwSetCursorPosCallback(window, (win, x, y) -> {
             if (shell == null) return;
             shell.idleCycles = 0;
-            int mouseX = toLogicalX(x);
-            int mouseY = toLogicalY(y);
+            int mouseX = worldMapFullscreen ? toFullscreenLogicalX(x) : toLogicalX(x);
+            int mouseY = worldMapFullscreen ? toFullscreenLogicalY(y) : toLogicalY(y);
+            if (mapDragging) {
+                mapPanX += mouseX - mapDragLastX;
+                mapPanY += mouseY - mapDragLastY;
+                mapDragLastX = mouseX;
+                mapDragLastY = mouseY;
+            }
+            if (lostHqHScrollDrag) {
+                // Scroll the scrollbar thumb horizontally.
+                double rs = lostHqReaderScale();
+                int pw = Math.max(1, sidebarPanelW() - 8);
+                int visW = Math.max(1, (int) Math.ceil(pw / rs));
+                int maxSX = Math.max(0, LOSTHQ_READER_WIDE - visW);
+                int thumbW = Math.max(20, pw * visW / LOSTHQ_READER_WIDE);
+                int trackRange = Math.max(1, pw - thumbW);
+                int dx = mouseX - lostHqHScrollAncX;
+                lostHqScrollX = Math.max(0, Math.min(maxSX,
+                        lostHqHScrollAncV + (int) ((long) dx * maxSX / trackRange)));
+            }
+            if (lostHqDragging) {
+                int dy = mouseY - lostHqDragLastY;
+                int dx = mouseX - lostHqDragLastX;
+                if (!lostHqDragMoved && (Math.abs(dy) > 5 || Math.abs(dx) > 5))
+                    lostHqDragMoved = true;
+                if (lostHqDragMoved) {
+                    if (isSkillCalcUri(lostHqPageUri))
+                        lostHqScrollY = Math.max(0, lostHqScrollY - dy);
+                    else scrollLostHqPage(-dy);
+                    scrollLostHqHorizontal(-dx);
+                    lostHqDragLastY = mouseY;
+                    lostHqDragLastX = mouseX;
+                }
+            }
             cursorX = mouseX;
             cursorY = mouseY;
+            if (worldMapFullscreen) {
+                shell.mouseX = -1;
+                shell.mouseY = -1;
+                return;
+            }
             if (isSidebarX(mouseX)) {
                 shell.mouseX = -1;
                 shell.mouseY = -1;
@@ -1235,12 +2810,65 @@ public final class GLRenderer implements TriangleRenderer {
             shell.mouseY = mouseY;
         });
 
+        glfwSetScrollCallback(window, (win, xoff, yoff) -> {
+            if ((worldMapFullscreen || sidebarOpen && sidebarTab == 3) && worldMapLoaded
+                    && cursorX >= worldMapViewX() && cursorY >= worldMapViewY()) {
+                float factor = (float) Math.pow(1.18, yoff);
+                float oldZoom = mapZoom;
+                mapZoom = Math.max(0.03f, Math.min(12f, mapZoom * factor));
+                float ratio = mapZoom / oldZoom;
+                float cx = cursorX - worldMapViewX();
+                float cy = cursorY - worldMapViewY();
+                mapPanX = cx - (cx - mapPanX) * ratio;
+                mapPanY = cy - (cy - mapPanY) * ratio;
+            } else if (sidebarOpen && sidebarTab == 4 && isSkillCalcUri(lostHqPageUri)) {
+                lostHqScrollY = Math.max(0, lostHqScrollY + (int) Math.round(-yoff * 24));
+            } else if (sidebarOpen && sidebarTab == 4 && lostHqPage != null) {
+                scrollLostHqPage((int) Math.round(-yoff * 36));
+                if (xoff != 0) scrollLostHqHorizontal((int) Math.round(xoff * 36));
+            }
+        });
+
         glfwSetMouseButtonCallback(window, (win, button, action, mods) -> {
             if (shell == null) return;
             shell.idleCycles = 0;
-            if (action == GLFW_PRESS && isSidebarX(cursorX)) {
-                clickSidebar(cursorX, cursorY);
-                return;
+            if (action == GLFW_PRESS) {
+                // Re-query cursor position so coords are fresh even after a sidebar
+                // open/close changed the coordinate mapping since the last mousemove.
+                double[] px = new double[1], py = new double[1];
+                glfwGetCursorPos(win, px, py);
+                int lx = worldMapFullscreen ? toFullscreenLogicalX(px[0]) : toLogicalX(px[0]);
+                int ly = worldMapFullscreen ? toFullscreenLogicalY(py[0]) : toLogicalY(py[0]);
+                cursorX = lx;
+                cursorY = ly;
+                if (worldMapFullscreen) {
+                    clickWorldMap(lx, ly);
+                    return;
+                }
+                if (isSidebarX(lx)) {
+                    if (button == GLFW_MOUSE_BUTTON_LEFT && sidebarOpen && sidebarTab == 4
+                            && (lostHqPage != null || isSkillCalcUri(lostHqPageUri))) {
+                        if (ly >= screenH - HSCROLL_H && lostHqPage != null) {
+                            // Press on the horizontal scrollbar — start thumb drag.
+                            lostHqHScrollDrag = true;
+                            lostHqHScrollAncX = lx;
+                            lostHqHScrollAncV = lostHqScrollX;
+                            return;
+                        } else if (ly >= 70) {
+                            // Press on page content — start pan drag.
+                            lostHqDragging  = true;
+                            lostHqDragMoved = false;
+                            lostHqDragLastY = ly;
+                            lostHqDragLastX = lx;
+                            lostHqPressX    = lx;
+                            lostHqPressY    = ly;
+                            return;
+                        }
+                        // y < 70 (BACK button, tab icons, etc.) — fall through to clickSidebar.
+                    }
+                    clickSidebar(lx, ly);
+                    return;
+                }
             }
             if (button == GLFW_MOUSE_BUTTON_MIDDLE) {
                 middleMouseDragging = action == GLFW_PRESS;
@@ -1257,6 +2885,15 @@ public final class GLRenderer implements TriangleRenderer {
                 shell.mouseButton          = btn;
             } else if (action == GLFW_RELEASE) {
                 shell.mouseButton = 0;
+                mapDragging = false;
+                lostHqHScrollDrag = false;
+                if (lostHqDragging) {
+                    if (!lostHqDragMoved) {
+                        // No significant movement — treat as a tap/click
+                        clickSidebar(lostHqPressX, lostHqPressY);
+                    }
+                    lostHqDragging = false;
+                }
             }
         });
 
@@ -1270,6 +2907,36 @@ public final class GLRenderer implements TriangleRenderer {
         glfwSetKeyCallback(window, (win, key, scancode, action, mods) -> {
             if (key == GLFW_KEY_GRAVE_ACCENT) {
                 if (action == GLFW_PRESS) statsOverlayVisible = !statsOverlayVisible;
+                return;
+            }
+            // Intercept keys for the native search panel
+            if (lostHqSearchFocused && sidebarOpen && sidebarTab == 4
+                    && (action == GLFW_PRESS || action == GLFW_REPEAT)) {
+                if (key == GLFW_KEY_BACKSPACE) {
+                    if (!lostHqSearchQuery.isEmpty()) {
+                        lostHqSearchQuery = lostHqSearchQuery.substring(0, lostHqSearchQuery.length() - 1);
+                        updateLostHqSearch();
+                    }
+                } else if (key == GLFW_KEY_ESCAPE) {
+                    lostHqSearchQuery = "";
+                    lostHqSearchFocused = false;
+                    lostHqSearchResults = List.of();
+                }
+                return;
+            }
+            // Intercept keys for the skill calculator panel
+            if (lostHqCalcFocus != 0 && sidebarOpen && sidebarTab == 4
+                    && (action == GLFW_PRESS || action == GLFW_REPEAT)) {
+                if (key == GLFW_KEY_BACKSPACE) {
+                    if (lostHqCalcFocus == 1 && !lostHqCalcCurrentXpStr.isEmpty())
+                        lostHqCalcCurrentXpStr = lostHqCalcCurrentXpStr.substring(0, lostHqCalcCurrentXpStr.length() - 1);
+                    else if (lostHqCalcFocus == 2 && !lostHqCalcGoalLvlStr.isEmpty())
+                        lostHqCalcGoalLvlStr = lostHqCalcGoalLvlStr.substring(0, lostHqCalcGoalLvlStr.length() - 1);
+                } else if (key == GLFW_KEY_ESCAPE) {
+                    lostHqCalcFocus = 0;
+                } else if (key == GLFW_KEY_TAB) {
+                    lostHqCalcFocus = lostHqCalcFocus == 1 ? 2 : 1;
+                }
                 return;
             }
             if (shell == null) return;
@@ -1289,12 +2956,43 @@ public final class GLRenderer implements TriangleRenderer {
 
         // Printable characters (letters, digits, symbols).
         glfwSetCharCallback(window, (win, codepoint) -> {
+            // Route printable characters to the search box when it's focused.
+            if (lostHqSearchFocused && sidebarOpen && sidebarTab == 4) {
+                if (codepoint >= 32 && codepoint < 128) {
+                    lostHqSearchQuery += (char) codepoint;
+                    updateLostHqSearch();
+                }
+                return;
+            }
+            // Route digits to the focused skill calculator field.
+            if (lostHqCalcFocus != 0 && sidebarOpen && sidebarTab == 4) {
+                if (codepoint >= '0' && codepoint <= '9') {
+                    if (lostHqCalcFocus == 1) {
+                        String next = lostHqCalcCurrentXpStr + (char) codepoint;
+                        if (next.length() <= 9) lostHqCalcCurrentXpStr = next;
+                    } else if (lostHqCalcFocus == 2) {
+                        String next = lostHqCalcGoalLvlStr + (char) codepoint;
+                        int val = 0;
+                        try { val = Integer.parseInt(next); } catch (NumberFormatException ignored) {}
+                        if (val <= 99) lostHqCalcGoalLvlStr = next;
+                    }
+                }
+                return;
+            }
             if (codepoint == '`') return;
             if (shell == null || codepoint < 32 || codepoint >= 128) return;
             shell.idleCycles = 0;
             shell.keyQueue[shell.keyQueueWritePos] = codepoint;
             shell.keyQueueWritePos = (shell.keyQueueWritePos + 1) & 0x7F;
         });
+    }
+
+    private int toFullscreenLogicalX(double x) {
+        return (int) Math.round(x * screenW / Math.max(1, windowW));
+    }
+
+    private int toFullscreenLogicalY(double y) {
+        return (int) Math.round(y * screenH / Math.max(1, windowH));
     }
 
     private void updateOutputViewport() {
@@ -1307,37 +3005,34 @@ public final class GLRenderer implements TriangleRenderer {
     private void updateOutputViewport(int width, int height) {
         if (width <= 0 || height <= 0) return;
         if (sidebarInsideWindow()) {
-            int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
-            double scale = Math.min((double) width / (screenW + sidebarLogW),
-                                    (double) height / screenH);
+            double scale = insideGameScale(width, height);
             int gameW   = Math.max(1, (int) Math.round(screenW * scale));
             int gameH   = Math.max(1, (int) Math.round(screenH * scale));
-            int sidebarW = Math.max(1, (int) Math.round(sidebarLogW * scale));
-            int gameX   = sidebarOpen ? 0 : (width - gameW - sidebarW) / 2;
-            glViewport(gameX, (height - gameH) / 2, gameW, gameH);
+            int gameX   = insideGameX(width, gameW);
+            int vertOff = (height - gameH) / 2;
+            glViewport(gameX, vertOff, gameW, gameH);
         } else {
-            double scale = Math.min((double) width / outputW(), (double) height / screenH);
+            double scale  = (width > 0) ? (double) width / outputW() : 1.0;
             int viewportW = Math.max(1, (int) Math.round(screenW * scale));
             int viewportH = Math.max(1, (int) Math.round(screenH * scale));
-            int fullW     = Math.max(1, (int) Math.round(outputW() * scale));
-            glViewport((width - fullW) / 2, (height - viewportH) / 2, viewportW, viewportH);
+            int vertOff   = height - viewportH;
+            glViewport(0, vertOff, viewportW, viewportH);
         }
     }
 
     private int toLogicalX(double x) {
         if (sidebarInsideWindow()) {
-            int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
-            double scale = Math.min((double) windowW / (screenW + sidebarLogW),
-                                    (double) windowH / screenH);
-            double sidebarPhysW     = sidebarLogW * scale;
+            int sidebarLogW = sidebarLogicalW();
+            double scale = insideGameScale(windowW, windowH);
+            double gamePhysW        = screenW * scale;
+            double gamePhysStart    = insideGameX(windowW, gamePhysW);
+            double sidebarPhysW     = insideSidebarW(windowW, gamePhysStart, gamePhysW,
+                                                     sidebarLogW, scale);
             double sidebarPhysStart = windowW - sidebarPhysW;
             if (x >= sidebarPhysStart) {
-                // cursor is over the sidebar at the right edge
-                return screenW + (int) ((x - sidebarPhysStart) / scale);
+                double logicalStart = screenW + sidebarLogW - sidebarPhysW / scale;
+                return (int) (logicalStart + (x - sidebarPhysStart) / scale);
             }
-            // cursor is over the game canvas
-            double gamePhysW    = screenW * scale;
-            double gamePhysStart = sidebarOpen ? 0 : (sidebarPhysStart - gamePhysW) / 2.0;
             return (int) ((x - gamePhysStart) / scale);
         }
         double scale = Math.min((double) windowW / outputW(), (double) windowH / screenH);
@@ -1348,14 +3043,33 @@ public final class GLRenderer implements TriangleRenderer {
     private int toLogicalY(double y) {
         double scale;
         if (sidebarInsideWindow()) {
-            int sidebarLogW = SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
-            scale = Math.min((double) windowW / (screenW + sidebarLogW),
-                             (double) windowH / screenH);
+            scale = insideGameScale(windowW, windowH);
         } else {
-            scale = Math.min((double) windowW / outputW(), (double) windowH / screenH);
+            scale = (windowW > 0) ? (double) windowW / outputW() : 1.0;
         }
         double top = (windowH - screenH * scale) / 2.0;
         return (int) ((y - top) / scale);
+    }
+
+    private double insideGameScale(double width, double height) {
+        return Math.min(width / screenW, height / screenH);
+    }
+
+    private int insideGameX(int width, int gameW) {
+        return sidebarOpen ? 0 : (width - gameW) / 2;
+    }
+
+    private double insideGameX(double width, double gameW) {
+        return sidebarOpen ? 0 : (width - gameW) / 2.0;
+    }
+
+    private int insideSidebarW(int width, int gameX, int gameW, int sidebarLogW, double scale) {
+        return (int) Math.min(Math.round(sidebarLogW * scale), Math.max(0, width - gameX - gameW));
+    }
+
+    private double insideSidebarW(double width, double gameX, double gameW,
+                                  int sidebarLogW, double scale) {
+        return Math.min(sidebarLogW * scale, Math.max(0, width - gameX - gameW));
     }
 
     private int outputW() {
@@ -1382,6 +3096,18 @@ public final class GLRenderer implements TriangleRenderer {
                 tab = y / SIDEBAR_ROW_H;
                 if (tab < 0 || tab >= SIDEBAR_TABS - 1) return;
             }
+            // Tab 1 (floating XP) is a toggle — no panel, just glow on/off
+            if (tab == 1) {
+                xpScreenEnabled = !xpScreenEnabled;
+                if (sidebarOpen && sidebarTab == 1) {
+                    sidebarOpen = false;
+                    resizeForSidebar();
+                    updateOutputViewport();
+                }
+                return;
+            }
+            // Reset map view each time world map tab is freshly opened
+            if (tab == 3 && !(sidebarOpen && sidebarTab == 3)) mapZoom = -1;
             if (sidebarOpen && sidebarTab == tab) {
                 sidebarOpen = false;
             } else {
@@ -1393,8 +3119,12 @@ public final class GLRenderer implements TriangleRenderer {
             return;
         }
         if (!sidebarOpen) return;
+        if (sidebarTab == 3 && y <= 42) {
+            clickWorldMap(x, y);
+            return;
+        }
         // Close button (top-right X in the panel header)
-        if (x >= sidebarPanelX() + SIDEBAR_PANEL_W - 28 && y <= 42) {
+        if (x >= sidebarPanelX() + sidebarPanelW() - 22 && y <= 42) {
             sidebarOpen = false;
             resizeForSidebar();
             updateOutputViewport();
@@ -1404,12 +3134,16 @@ public final class GLRenderer implements TriangleRenderer {
         switch (sidebarTab) {
             case 0 -> { // Hiscores – skill selector buttons (2 per row, 10 rows, y=52..181)
                 int px = sidebarPanelX();
+                int panelW = sidebarPanelW();
+                int columns = panelW >= 190 ? 2 : 1;
+                int buttonW = (panelW - 20 - (columns - 1) * 4) / columns;
                 int relX = x - (px + 10);
                 int relY = y - 52;
-                int col = relX / 82;
+                int col = relX / (buttonW + 4);
                 int row = relY / 13;
-                if (row >= 0 && row < 10 && col >= 0 && col < 2) {
-                    int skill = row * 2 + col;
+                if (relX >= 0 && relY >= 0 && col >= 0 && col < columns
+                        && relX % (buttonW + 4) < buttonW) {
+                    int skill = row * columns + col;
                     if (skill < HSCORE_SKILL_LABEL.length && skill != hiscoresSkill) {
                         hiscoresSkill  = skill;
                         hiscoresNames  = new String[0];
@@ -1423,8 +3157,52 @@ public final class GLRenderer implements TriangleRenderer {
             }
             case 2 -> { // XP Tracker – reset button
                 int px = sidebarPanelX();
-                if (x >= px + SIDEBAR_PANEL_W - 58 && y >= 52 && y < 68) {
+                if (x >= px + sidebarPanelW() - 58 && y >= 52 && y < 74) {
                     resetXpSession();
+                }
+            }
+            case 3 -> clickWorldMap(x, y);
+            case 4 -> { // LostHQ toolkit links
+                int px = sidebarPanelX();
+                if (lostHqPage != null || lostHqPageUri != null) {
+                    if (y >= 48 && y < 66) {
+                        // BACK button — go to previous page in history
+                        URI prev = lostHqHistory.isEmpty() ? null : lostHqHistory.pollFirst();
+                        loadLostHqPage(prev);
+                    } else if (isSkillCalcUri(lostHqPageUri)) {
+                        // Skill calculator: focus the field the user clicked
+                        int labelW = 82;
+                        int inputH = 20;
+                        int row1Y = 96;
+                        int row3Y = row1Y + 24 + 26;
+                        if (y >= row1Y && y < row1Y + inputH && x >= px + 6 + labelW) {
+                            lostHqCalcFocus = 1;
+                        } else if (y >= row3Y && y < row3Y + inputH && x >= px + 6 + labelW) {
+                            int halfW = (sidebarPanelW() - 8 - labelW - 4) / 2;
+                            if (x < px + 6 + labelW + halfW) lostHqCalcFocus = 2;
+                            else lostHqCalcFocus = 0;
+                        } else {
+                            lostHqCalcFocus = 0;
+                        }
+                    } else if (isSearchPageUri(lostHqPageUri)) {
+                        // Search page interaction
+                        if (y >= 70 && y < 90) {
+                            lostHqSearchFocused = true;   // clicked search box
+                        } else {
+                            lostHqSearchFocused = false;  // clicked elsewhere
+                        }
+                    } else {
+                        clickLostHqPage(x, y);
+                    }
+                } else {
+                    int itemStartY = 52;
+                    int itemStep = Math.max(42, (screenH - itemStartY - 8) / LOSTHQ_ITEMS.length);
+                    int relY = y - itemStartY;
+                    int item = relY / itemStep;
+                    if (x >= px + 4 && x < px + sidebarPanelW() - 4
+                            && relY >= 0 && item < LOSTHQ_ITEMS.length) {
+                        openLostHqPage(item);
+                    }
                 }
             }
             case 5 -> { // Settings toggles (each row is 44 px tall starting at y=72)
@@ -1435,6 +3213,121 @@ public final class GLRenderer implements TriangleRenderer {
                 if (y >= 248 && y < 292) settingsShiftClick   = !settingsShiftClick;
                 if (y >= 292 && y < 336) settingsDiscordRp    = !settingsDiscordRp;
             }
+        }
+    }
+
+    private void scrollLostHqPage(int amount) {
+        JEditorPane page = lostHqPage;
+        if (page == null) return;
+        double readerScale = lostHqReaderScale();
+        int pageH = Math.max(1, (int) Math.ceil((screenH - 70 - HSCROLL_H) / readerScale));
+        try {
+            int maxScroll = Math.max(0, page.getPreferredSize().height - pageH);
+            int readerAmount = (int) Math.round(amount / readerScale);
+            lostHqScrollY = Math.max(0, Math.min(maxScroll, lostHqScrollY + readerAmount));
+        } catch (RuntimeException ignored) {
+            // JDK BoxView/FlowView bugs: skip scroll recalculation this frame
+        }
+    }
+
+    private void scrollLostHqHorizontal(int amountScreenPx) {
+        double readerScale = lostHqReaderScale();
+        int pageW = Math.max(1, sidebarPanelW() - 8);
+        int visibleW = Math.max(1, (int) Math.ceil(pageW / readerScale));
+        int maxScroll = Math.max(0, LOSTHQ_READER_WIDE - visibleW);
+        int readerAmt = (int) Math.round(amountScreenPx / readerScale);
+        lostHqScrollX = Math.max(0, Math.min(maxScroll, lostHqScrollX + readerAmt));
+    }
+
+    private void clickLostHqPage(int x, int y) {
+        JEditorPane page = lostHqPage;
+        URI pageUri = lostHqPageUri;
+        if (page == null || pageUri == null || y < 70) return;
+        double readerScale = lostHqReaderScale();
+        int relX = (int) ((x - sidebarPanelX() - 4) / readerScale) + lostHqScrollX;
+        int relY = (int) ((y - 70) / readerScale) + lostHqScrollY;
+        if (relX < 0 || relX >= LOSTHQ_READER_WIDE || relY < 0) return;
+        try {
+            int pos;
+            synchronized (page.getTreeLock()) {
+                pos = page.viewToModel2D(new java.awt.Point(relX, relY));
+            }
+            HTMLDocument doc = (HTMLDocument) page.getDocument();
+            Element element = doc.getCharacterElement(pos);
+            AttributeSet anchor = (AttributeSet) element.getAttributes().getAttribute(HTML.Tag.A);
+            if (anchor == null) return;
+            Object href = anchor.getAttribute(HTML.Attribute.HREF);
+            if (href == null) return;
+            String target = href.toString();
+            if (target.startsWith("progress:")) {
+                toggleLostHqProgressStep(target);
+            } else {
+                openLostHqPage(pageUri.resolve(target));
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void clickWorldMap(int x, int y) {
+        int vx = worldMapViewX();
+        int vy = worldMapViewY();
+        int vw = worldMapViewW();
+        int vh = worldMapViewH();
+        int right = vx + vw;
+
+        if (y <= 42) {
+            int keyX = right - (worldMapFullscreen ? 75 : 129);
+            if (x >= keyX && x < keyX + 29) {
+                worldMapKeyVisible = !worldMapKeyVisible;
+            } else if (!worldMapFullscreen && x >= right - 98 && x < right - 46) {
+                worldMapFollowing = !worldMapFollowing;
+                mapDragging = false;
+            } else if (x >= right - 44 && x < right - 24) {
+                worldMapFullscreen = !worldMapFullscreen;
+                mapZoom = -1;
+                mapDragging = false;
+                updateOutputViewport();
+            } else if (x >= right - 22 && x < right - 2) {
+                worldMapFullscreen = false;
+                sidebarOpen = false;
+                mapDragging = false;
+                resizeForSidebar();
+                updateOutputViewport();
+            }
+            return;
+        }
+
+        BufferedImage keyPage = worldMapKeyPages[worldMapKeyPage];
+        int overlayKeyHeight = Math.min(vh - 8, (keyPage != null ? keyPage.getHeight() : 434) + 26);
+        if (worldMapKeyVisible && (!worldMapFullscreen
+                || x < vx + 8 + worldMapKeyOverlayWidth() && y < vy + 4 + overlayKeyHeight)) {
+            int keyWidth = worldMapFullscreen ? worldMapKeyOverlayWidth() : vw;
+            int keyX = worldMapFullscreen ? vx + 8 : vx;
+            int keyY = worldMapFullscreen ? vy + 4 : vy;
+            int keyHeight = worldMapFullscreen
+                    ? overlayKeyHeight
+                    : vh;
+            if (y >= keyY + keyHeight - 24) {
+                if (x < keyX + keyWidth / 2) {
+                    worldMapKeyPage = Math.max(0, worldMapKeyPage - 1);
+                } else {
+                    worldMapKeyPage = Math.min(worldMapKeyPages.length - 1, worldMapKeyPage + 1);
+                }
+            }
+            return;
+        }
+        if (!worldMapLoaded || y < vy) return;
+
+        int btnX = vx + vw - 20;
+        int btnY = vy + vh - 38;
+        if (x >= btnX && x < btnX + 18 && y >= btnY && y < btnY + 17) {
+            zoomMapAround(1.4f, vx + vw / 2, vy + vh / 2);
+        } else if (x >= btnX && x < btnX + 18 && y >= btnY + 19 && y < btnY + 36) {
+            zoomMapAround(1f / 1.4f, vx + vw / 2, vy + vh / 2);
+        } else if (!worldMapFollowing) {
+            mapDragging = true;
+            mapDragLastX = x;
+            mapDragLastY = y;
         }
     }
 
@@ -1457,8 +3350,24 @@ public final class GLRenderer implements TriangleRenderer {
         return glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
     }
 
+    private int sidebarPanelW() {
+        if (!sidebarOpen || !sidebarInsideWindow()) return SIDEBAR_PANEL_W;
+        double scale = insideGameScale(windowW, windowH);
+        if (scale <= 0) return SIDEBAR_PANEL_W;
+        int available = (int) Math.floor(windowW / scale) - screenW - SIDEBAR_RAIL_W;
+        return Math.max(1, Math.min(SIDEBAR_PANEL_W, available));
+    }
+
+    private int sidebarLogicalW() {
+        return SIDEBAR_RAIL_W + (sidebarOpen ? sidebarPanelW() : 0);
+    }
+
+    private double lostHqReaderScale() {
+        return Math.min(1.0, Math.max(1, sidebarPanelW() - 8) / (double) LOSTHQ_READER_W);
+    }
+
     private int sidebarRailX() {
-        return screenW + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
+        return screenW + (sidebarOpen ? sidebarPanelW() : 0);
     }
 
     private int sidebarPanelX() {

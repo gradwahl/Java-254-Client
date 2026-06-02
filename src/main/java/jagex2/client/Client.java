@@ -15,8 +15,11 @@ import com.gradwahl.rs254.gl.GLRenderer;
 import com.gradwahl.rs254.ClientDebugger;
 
 import java.awt.*;
+import java.awt.image.BufferedImage;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import javax.imageio.ImageIO;
 import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.Socket;
@@ -492,6 +495,12 @@ public class Client extends GameShell {
 	};
 	private static final int[] XP_DROP_ICON_ORDER = {
 		0, 3, 14, 2, 16, 13, 1, 15, 10, 4, 17, 7, 5, 12, 11, 6, 9, 8, 20
+	};
+	private static final String[] SKILL_ICON_FILENAMES = {
+		"attack", "defence", "strength", "hitpoints", "ranged", "prayer", "magic",
+		"cooking", "woodcutting", "fletching", "fishing", "firemaking", "crafting",
+		"smithing", "mining", "herblore", "agility", "thieving", null, null,
+		"runecrafting", null, null, null, null
 	};
 	private final boolean[] statXpInitialized = new boolean[Stats.COUNT];
 	private final int[] xpDropSkill = new int[XP_DROP_COUNT];
@@ -6050,6 +6059,11 @@ public class Client extends GameShell {
 		if (this.inMultizone == 1) {
 			this.imageHeadicons[1].plotSprite(472, 296);
 		}
+		if (localPlayer != null) {
+			GLRenderer.playerTileX = this.sceneBaseTileX + (localPlayer.x >> 7);
+			GLRenderer.playerTileZ = this.sceneBaseTileZ + (localPlayer.z >> 7);
+			GLRenderer.playerPlane = this.minusedlevel;
+		}
 		this.drawXpDrops();
 		if (this.systemUpdateTimer == 0) {
 			return;
@@ -6092,6 +6106,7 @@ public class Client extends GameShell {
 			}
 			return;
 		}
+		this.loadCustomXpDropIcons();
 		this.loadXpDropSkillIcons();
 		int row = 0;
 		for (int i = 0; i < XP_DROP_COUNT; i++) {
@@ -6106,13 +6121,53 @@ public class Client extends GameShell {
 			Pix32 icon = this.xpDropSkillIcons[skill];
 			int iconWidth = icon == null ? 0 : icon.wi + 4;
 			int x = 508 - this.fontPlain11.stringWid(text);
-			int y = 17 + row * 18 - Math.min(age / 10, 6);
+			int y = 37 + row * 18 - Math.min(age / 10, 6);
 			if (icon != null) {
 				icon.plotSprite(x - iconWidth, y - icon.hi + 2);
 			}
 			this.fontPlain11.drawString(0, x + 1, y + 1, text);
 			this.fontPlain11.drawString(16777215, x, y, text);
 			row++;
+		}
+	}
+
+	private void loadCustomXpDropIcons() {
+		if (this.xpDropSkillIconsLoaded) {
+			return;
+		}
+		int size = 16;
+		boolean anyLoaded = false;
+		for (int skill = 0; skill < SKILL_ICON_FILENAMES.length; skill++) {
+			String name = SKILL_ICON_FILENAMES[skill];
+			if (name == null) continue;
+			try (InputStream is = Client.class.getResourceAsStream("/skillicons/" + name + ".png")) {
+				if (is == null) continue;
+				BufferedImage src = ImageIO.read(is);
+				int srcW = src.getWidth();
+				int srcH = src.getHeight();
+				double scale = (double) size / Math.max(srcW, srcH);
+				int dstW = Math.max(1, (int) Math.round(srcW * scale));
+				int dstH = Math.max(1, (int) Math.round(srcH * scale));
+				BufferedImage scaled = new BufferedImage(dstW, dstH, BufferedImage.TYPE_INT_ARGB);
+				Graphics2D g2 = scaled.createGraphics();
+				g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+				g2.drawImage(src, 0, 0, dstW, dstH, null);
+				g2.dispose();
+				Pix32 pix = new Pix32(dstW, dstH);
+				scaled.getRGB(0, 0, dstW, dstH, pix.data, 0, dstW);
+				for (int j = 0; j < pix.data.length; j++) {
+					int argb = pix.data[j];
+					int rgb = argb & 0xFFFFFF;
+					pix.data[j] = ((argb >>> 24) < 128) ? 0 : (rgb == 0 ? 1 : rgb);
+				}
+				this.xpDropSkillIcons[skill] = pix;
+				anyLoaded = true;
+			} catch (Exception e) {
+				System.err.println("[skillicons] Failed to load " + name + ": " + e.getMessage());
+			}
+		}
+		if (anyLoaded) {
+			this.xpDropSkillIconsLoaded = true;
 		}
 	}
 
