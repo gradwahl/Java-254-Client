@@ -5,9 +5,11 @@ import jagex2.client.Client;
 import jagex2.graphics.Pix3D;
 import jagex2.graphics.PixMap;
 import jagex2.graphics.TriangleRenderer;
+import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.system.MemoryUtil;
 
+import java.awt.image.BufferedImage;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -18,6 +20,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import javax.imageio.ImageIO;
 
 import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
 import static org.lwjgl.glfw.GLFW.*;
@@ -45,7 +48,7 @@ public final class GLRenderer implements TriangleRenderer {
     private static final int MAX_TRIS        = 32_768;
     private static final int MAX_VERTS       = MAX_TRIS * 3;
     private static final int SIDEBAR_PANEL_W = 180;
-    private static final int SIDEBAR_RAIL_W  = 28;
+    private static final int SIDEBAR_RAIL_W  = 20;
     private static final int SIDEBAR_ROW_H   = 34;
     private static final int SIDEBAR_TABS    = 6;
 
@@ -233,6 +236,12 @@ public final class GLRenderer implements TriangleRenderer {
     private volatile int[]    hiscoresLevels = new int[0];
     private long            hiscoresFetchAt = 0;
     private volatile boolean hiscoresFetching = false;
+    private final java.util.concurrent.ExecutorService hiscoresFetcher =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "hiscores-fetch");
+                t.setDaemon(true);
+                return t;
+            });
 
     // Only intercept Pix3D calls when rendering to the main game viewport, not icon buffers.
     public static int[] viewportPixels = null;
@@ -274,21 +283,54 @@ public final class GLRenderer implements TriangleRenderer {
     // lifecycle
     // -------------------------------------------------------------------------
 
-    /** Create the GLFW window and initialise OpenGL. Call once before use. */
-    public void init() {
-        glfwSetErrorCallback((error, description) ->
-            System.err.println("[GLFW ERROR] " + error + ": " + org.lwjgl.glfw.GLFWErrorCallback.getDescription(description)));
-        if (!glfwInit()) throw new IllegalStateException("GLFW init failed");
-
+    private long tryCreateWindow(int w, int h) {
+        // Attempt 1: OpenGL 3.3 core profile (preferred)
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
         glfwWindowHint(GLFW_VISIBLE,   GLFW_FALSE);
+        long win = glfwCreateWindow(w, h, "RS254 - OpenGL", NULL, NULL);
+        if (win != NULL) return win;
 
-        window = glfwCreateWindow(windowW, screenH, "RS254 - OpenGL", NULL, NULL);
-        if (window == NULL) throw new RuntimeException("GLFW window creation failed");
+        // Attempt 2: OpenGL 3.3 compatibility profile (some older/VM drivers)
+        glfwDefaultWindowHints();
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+        glfwWindowHint(GLFW_VISIBLE,   GLFW_FALSE);
+        win = glfwCreateWindow(w, h, "RS254 - OpenGL", NULL, NULL);
+        if (win != NULL) { System.err.println("[GL] Using compatibility profile fallback"); }
+        return win;
+    }
+
+    /** Create the GLFW window and initialise OpenGL. Call once before use. */
+    public void init() {
+        glfwSetErrorCallback((error, description) ->
+            System.err.println("[GLFW ERROR] " + error + ": " + org.lwjgl.glfw.GLFWErrorCallback.getDescription(description)));
+        if (!glfwInit()) throw new IllegalStateException("GLFW init failed");
+
+        // Query the primary monitor's content (DPI) scale so the initial window
+        // size produces a framebuffer close to native RS2 physical pixel dimensions.
+        // Without this, a 175% DPI display would create a 1388×880 framebuffer for
+        // a 793×503 logical window, upscaling everything and making UI elements huge.
+        glfwDefaultWindowHints();
+        float[] xscale = {1f}, yscale = {1f};
+        long primaryMonitor = glfwGetPrimaryMonitor();
+        if (primaryMonitor != NULL) {
+            glfwGetMonitorContentScale(primaryMonitor, xscale, yscale);
+        }
+        int initW = Math.max(1, Math.round(windowW / xscale[0]));
+        int initH = Math.max(1, Math.round(screenH / yscale[0]));
+
+        window = tryCreateWindow(initW, initH);
+        if (window == NULL) throw new RuntimeException(
+            "GLFW window creation failed — OpenGL 3.3 is required.\n" +
+            "Update your GPU drivers, or on a VM enable 3D acceleration.\n" +
+            "On Windows without a GPU, install Mesa (opengl32.dll) and re-run.");
+        setWindowIcon();
 
         glfwMakeContextCurrent(window);
         glfwSwapInterval(1);
@@ -311,6 +353,56 @@ public final class GLRenderer implements TriangleRenderer {
         setupCallbacks();
         updateOutputViewport();
         glfwShowWindow(window);
+    }
+
+    private void setWindowIcon() {
+        try (InputStream is = GLRenderer.class.getResourceAsStream("/icon.ico")) {
+            if (is == null) return;
+            BufferedImage img = loadIco(is);
+            if (img == null) return;
+            int w = img.getWidth(), h = img.getHeight();
+            int[] rgb = img.getRGB(0, 0, w, h, null, 0, w);
+            ByteBuffer buf = MemoryUtil.memAlloc(w * h * 4);
+            try {
+                for (int px : rgb) {
+                    buf.put((byte) ((px >> 16) & 0xFF))
+                       .put((byte) ((px >> 8)  & 0xFF))
+                       .put((byte)  (px         & 0xFF))
+                       .put((byte) ((px >> 24) & 0xFF));
+                }
+                buf.flip();
+                try (GLFWImage.Buffer icons = GLFWImage.malloc(1)) {
+                    icons.position(0).width(w).height(h).pixels(buf);
+                    glfwSetWindowIcon(window, icons);
+                }
+            } finally {
+                MemoryUtil.memFree(buf);
+            }
+        } catch (Exception e) {
+            System.err.println("[Icon] " + e.getMessage());
+        }
+    }
+
+    private static BufferedImage loadIco(InputStream is) throws Exception {
+        byte[] data = is.readAllBytes();
+        if (data.length < 6) return null;
+        int count = (data[4] & 0xFF) | ((data[5] & 0xFF) << 8);
+        int bestW = -1, bestOff = 0, bestLen = 0;
+        for (int i = 0; i < count; i++) {
+            int base = 6 + i * 16;
+            if (base + 16 > data.length) break;
+            int w   = data[base] & 0xFF;
+            if (w == 0) w = 256;
+            int sz  = icoInt(data, base + 8);
+            int off = icoInt(data, base + 12);
+            if (w > bestW) { bestW = w; bestOff = off; bestLen = sz; }
+        }
+        if (bestW < 0) return null;
+        return ImageIO.read(new java.io.ByteArrayInputStream(data, bestOff, bestLen));
+    }
+
+    private static int icoInt(byte[] b, int off) {
+        return (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8) | ((b[off + 2] & 0xFF) << 16) | ((b[off + 3] & 0xFF) << 24);
     }
 
     /** Attach a GameShell so GLFW input events are forwarded to the game. */
@@ -378,6 +470,7 @@ public final class GLRenderer implements TriangleRenderer {
         MemoryUtil.memFree(buf);
         if (uiDirectBuf      != null) MemoryUtil.memFree(uiDirectBuf);
         if (sidebarNativeDirect != null) MemoryUtil.memFree(sidebarNativeDirect);
+        hiscoresFetcher.shutdownNow();
         glfwFreeCallbacks(window);
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -646,20 +739,23 @@ public final class GLRenderer implements TriangleRenderer {
 
         // Render sidebar into native buffer at physical resolution via Java2D.
         sg = sidebarNativeBuf.createGraphics();
-        sg.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING,
-                            java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-        sg.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
-                            java.awt.RenderingHints.VALUE_RENDER_QUALITY);
-        sg.setRenderingHint(java.awt.RenderingHints.KEY_FRACTIONALMETRICS,
-                            java.awt.RenderingHints.VALUE_FRACTIONALMETRICS_ON);
-        sg.setBackground(new java.awt.Color(0, 0, 0, 0));
-        sg.clearRect(0, 0, physW, physH);
-        // Map logical sidebar coordinates (x origin = screenW) to physical pixels.
-        sg.scale(scale, scale);
-        sg.translate(-screenW, 0);
-        drawSidebar();
-        sg.dispose();
-        sg = null;
+        try {
+            sg.setRenderingHint(java.awt.RenderingHints.KEY_TEXT_ANTIALIASING,
+                                java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            sg.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
+                                java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+            sg.setRenderingHint(java.awt.RenderingHints.KEY_FRACTIONALMETRICS,
+                                java.awt.RenderingHints.VALUE_FRACTIONALMETRICS_ON);
+            sg.setBackground(new java.awt.Color(0, 0, 0, 0));
+            sg.clearRect(0, 0, physW, physH);
+            // Map logical sidebar coordinates (x origin = screenW) to physical pixels.
+            sg.scale(scale, scale);
+            sg.translate(-screenW, 0);
+            drawSidebar();
+        } finally {
+            sg.dispose();
+            sg = null;
+        }
 
         // Upload Java2D pixels (TYPE_INT_ARGB = BGRA in little-endian memory) to GL.
         int[] pixels = ((java.awt.image.DataBufferInt)
@@ -695,16 +791,24 @@ public final class GLRenderer implements TriangleRenderer {
 
         fillUiRect(railX, 0, SIDEBAR_RAIL_W, screenH, 0xFF1B1B1B);
         fillUiRect(railX, 0, 1, screenH, 0xFF363636);
-        for (int index = 0; index < SIDEBAR_TABS; index++) {
+        for (int index = 0; index < SIDEBAR_TABS - 1; index++) {
             int y      = index * SIDEBAR_ROW_H;
             boolean active = sidebarOpen && sidebarTab == index;
             if (active) {
                 fillUiRect(railX + 1, y, SIDEBAR_RAIL_W - 1, SIDEBAR_ROW_H, 0xFF3F3523);
                 fillUiRect(railX + 1, y, 3, SIDEBAR_ROW_H, 0xFFE89E14);
             }
-            // 8×8 icon drawn at scale 2 = 16×16 px, centred in 28×34 cell
-            drawIconScaled(index, railX + 6, y + 9, 2, active ? 0xFFE89E14 : 0xFFDCDCDC);
+            // 8×8 icon at scale 1, centred in 20×34 cell
+            drawIconScaled(index, railX + 6, y + 13, 1, active ? 0xFFE89E14 : 0xFFDCDCDC);
         }
+        // Settings icon (tab 5) pinned to the bottom of the rail
+        int settingsY      = screenH - SIDEBAR_ROW_H;
+        boolean settingsActive = sidebarOpen && sidebarTab == 5;
+        if (settingsActive) {
+            fillUiRect(railX + 1, settingsY, SIDEBAR_RAIL_W - 1, SIDEBAR_ROW_H, 0xFF3F3523);
+            fillUiRect(railX + 1, settingsY, 3, SIDEBAR_ROW_H, 0xFFE89E14);
+        }
+        drawIconScaled(5, railX + 6, settingsY + 13, 1, settingsActive ? 0xFFE89E14 : 0xFFDCDCDC);
     }
 
     private void drawSidebarPanel(int x) {
@@ -859,7 +963,7 @@ public final class GLRenderer implements TriangleRenderer {
         hiscoresFetchAt  = System.currentTimeMillis();
         String urlStr = "http://localhost:3000/api/hiscores?page=0&skill="
                 + (skill == 0 ? "overall" : String.valueOf(skill));
-        Thread t = new Thread(() -> {
+        hiscoresFetcher.execute(() -> {
             try {
                 HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
                 conn.setConnectTimeout(3000);
@@ -867,14 +971,14 @@ public final class GLRenderer implements TriangleRenderer {
                 try (InputStream in = conn.getInputStream()) {
                     String json = new String(in.readAllBytes(), StandardCharsets.UTF_8);
                     parseHiscores(json);
+                } finally {
+                    conn.disconnect();
                 }
             } catch (Exception ignored) {
             } finally {
                 hiscoresFetching = false;
             }
         });
-        t.setDaemon(true);
-        t.start();
     }
 
     private void parseHiscores(String json) {
@@ -1271,8 +1375,13 @@ public final class GLRenderer implements TriangleRenderer {
     private void clickSidebar(int x, int y) {
         int railX = sidebarRailX();
         if (x >= railX) {
-            int tab = y / SIDEBAR_ROW_H;
-            if (tab < 0 || tab >= SIDEBAR_TABS) return;
+            int tab;
+            if (y >= screenH - SIDEBAR_ROW_H) {
+                tab = 5; // settings pinned at bottom
+            } else {
+                tab = y / SIDEBAR_ROW_H;
+                if (tab < 0 || tab >= SIDEBAR_TABS - 1) return;
+            }
             if (sidebarOpen && sidebarTab == tab) {
                 sidebarOpen = false;
             } else {

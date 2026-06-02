@@ -4,9 +4,9 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.gradwahl</groupId>
-    <artifactId>java-254-client</artifactId>
+    <artifactId>Progressive-Java-Client</artifactId>
     <version>0.1.0</version>
-    <name>Java 254 Client</name>
+    <name>Progressive Java Client</name>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>

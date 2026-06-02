@@ -58,22 +58,24 @@ if [ "$MISSING" -eq 1 ]; then
     REBUILD=1
 fi
 
-if [ ! -f target/java-254-client.jar ] || [ "$REBUILD" -eq 1 ]; then
+if [ ! -f target/Progressive-Java-Client.jar ] || [ "$REBUILD" -eq 1 ]; then
     bash build.sh
 fi
 
+mkdir -p "$SCRIPT_DIR/logs"
+
 echo "Starting RS2 client (HTTP :80, game :43594)..."
 java \
-    -Drs254.logDir="$SCRIPT_DIR" \
+    -Drs254.logDir="$SCRIPT_DIR/logs" \
     --enable-native-access=ALL-UNNAMED \
     --add-opens java.base/java.lang=ALL-UNNAMED \
     --add-opens java.base/java.lang.reflect=ALL-UNNAMED \
-    -XX:ErrorFile="$SCRIPT_DIR/jvm_crash_%p.log" \
-    -jar target/java-254-client.jar \
+    -XX:ErrorFile="$SCRIPT_DIR/logs/jvm_crash_%p.log" \
+    -jar target/Progressive-Java-Client.jar \
     10 0 highmem members 32
 
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
     echo ""
-    echo "Client exited with error code $EXIT_CODE. Check $SCRIPT_DIR/ for crash logs."
+    echo "Client exited with error code $EXIT_CODE. Check $SCRIPT_DIR/logs for crash logs."
 fi

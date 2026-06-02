@@ -16,7 +16,7 @@ Or with PowerShell:
 
 Requires JDK 17+.
 
-The generated `target/java-254-client.jar` is standalone: it contains the
+The generated `target/Progressive-Java-Client.jar` is standalone: it contains the
 required libraries and native binaries, and can be copied elsewhere by itself.
 
 You can also build with Maven:
@@ -39,5 +39,5 @@ LWJGL and starts the client with the default server settings.
 You can also launch the generated JAR or a GitHub Release JAR directly:
 
 ```powershell
-java -jar java-254-client.jar
+java -jar Progressive-Java-Client.jar
 ```

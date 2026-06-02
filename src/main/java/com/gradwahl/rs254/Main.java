@@ -95,17 +95,20 @@ public final class Main {
         }
 
         private File resolveLogDir() {
+            File base;
             String configuredLogDir = System.getProperty("rs254.logDir");
             if (configuredLogDir != null && !configuredLogDir.isBlank()) {
-                return new File(configuredLogDir);
-            }
-            try {
-                File jar = new File(Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-                if (jar.isFile()) {
-                    return jar.getParentFile();
+                base = new File(configuredLogDir);
+            } else {
+                try {
+                    File jar = new File(Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+                    base = jar.isFile() ? new File(jar.getParentFile(), "logs") : new File("logs");
+                } catch (Exception ignored) {
+                    base = new File("logs");
                 }
-            } catch (Exception ignored) {}
-            return new File(".");
+            }
+            base.mkdirs();
+            return base;
         }
     }
 }

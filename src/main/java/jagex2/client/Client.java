@@ -1632,7 +1632,7 @@ public class Client extends GameShell {
 			int var20 = this.onDemand.getFileCount(0);
 			for (int var21 = 0; var21 < var20; var21++) {
 				int var22 = this.onDemand.getModelFlags(var21);
-				if ((var22 & 0x1) != 0) {
+				if (var22 != 0) {
 					this.onDemand.request(0, var21);
 				}
 			}
@@ -9944,7 +9944,14 @@ public class Client extends GameShell {
 						var52 = var14.getTempModel(var53.frames[var14.seqFrame], var50, var53.iframes[var14.seqFrame]);
 					}
 					if (var52 != null) {
+						// Interface 3D model widgets must render into the pixel buffer (software
+						// path) so they composite on top of the interface background, not behind
+						// it. Temporarily suppress GL routing by clearing the viewportPixels
+						// sentinel so Pix3D falls through to software rasterisation.
+						int[] savedViewportPixels = com.gradwahl.rs254.gl.GLRenderer.viewportPixels;
+						com.gradwahl.rs254.gl.GLRenderer.viewportPixels = null;
 						var52.objRender(0, var14.modelYAn, 0, var14.modelXAn, 0, var48, var49);
+						com.gradwahl.rs254.gl.GLRenderer.viewportPixels = savedViewportPixels;
 					}
 					Pix3D.projectionX = var46;
 					Pix3D.projectionY = var47;
@@ -10641,12 +10648,16 @@ public class Client extends GameShell {
 				arg0.modelXAn = 150;
 				arg0.modelYAn = (int) (Math.sin((double) loopCycle / 40.0D) * 256.0D) & 0x7FF;
 				if (this.updateDesignModel) {
+					boolean designModelsReady = true;
 					for (int var7 = 0; var7 < 7; var7++) {
 						int var8 = this.designKits[var7];
 						if (var8 >= 0 && !IdkType.list[var8].checkModel()) {
-							return;
+							designModelsReady = false;
 						}
 					}
+					if (!designModelsReady) {
+						// Models still loading - skip this frame but keep trying
+					} else {
 					this.updateDesignModel = false;
 					Model[] var9 = new Model[7];
 					int var10 = 0;
@@ -10671,6 +10682,7 @@ public class Client extends GameShell {
 					arg0.modelType = 5;
 					arg0.modelId = 0;
 					IfType.cacheModel(0, var13, 5);
+					}
 				}
 			} else if (var3 == 324) {
 				if (this.genderButtonImage0 == null) {
