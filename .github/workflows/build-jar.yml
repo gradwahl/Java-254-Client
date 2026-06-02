@@ -27,15 +27,15 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: java-254-client
-          path: target/java-254-client-*.jar
+          name: Progressive-Java-Client
+          path: target/Progressive-Java-Client-*.jar
 
       - name: Name release JAR
         if: startsWith(github.ref, 'refs/tags/v')
-        run: cp target/java-254-client-*.jar "java-254-client-${GITHUB_REF_NAME}.jar"
+        run: cp target/Progressive-Java-Client-*.jar "Progressive-Java-Client-${GITHUB_REF_NAME}.jar"
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "java-254-client-${GITHUB_REF_NAME}.jar" --verify-tag --generate-notes
+        run: gh release create "$GITHUB_REF_NAME" "Progressive-Java-Client-${GITHUB_REF_NAME}.jar" --verify-tag --generate-notes
