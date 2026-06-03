@@ -32,6 +32,8 @@ import java.util.zip.CRC32;
 @ObfuscatedName("client")
 public class Client extends GameShell {
 
+	private static final boolean FAST_STARTUP = Boolean.parseBoolean(System.getProperty("rs254.fastStartup", "true"));
+
 	@ObfuscatedName("client.ab")
 	public int activeMapFunctionCount;
 
@@ -496,7 +498,13 @@ public class Client extends GameShell {
 	private static final int[] XP_DROP_ICON_ORDER = {
 		0, 3, 14, 2, 16, 13, 1, 15, 10, 4, 17, 7, 5, 12, 11, 6, 9, 8, 20
 	};
-	private static final String[] SKILL_ICON_FILENAMES = {
+	private static final String[] XP_DROP_SMALL_SKILL_ICON_FILENAMES = {
+		"attack", "defence", "strength", "hitpoints", "ranged", "prayer", "magic",
+		"cooking", "woodcutting", "fletching", "fishing", "firemaking", "crafting",
+		"smithing", "mining", "herblore", "agility", "thieving", "slayer", null,
+		"runecraft", null, null, null, null
+	};
+	private static final String[] XP_DROP_LEGACY_SKILL_ICON_FILENAMES = {
 		"attack", "defence", "strength", "hitpoints", "ranged", "prayer", "magic",
 		"cooking", "woodcutting", "fletching", "fishing", "firemaking", "crafting",
 		"smithing", "mining", "herblore", "agility", "thieving", null, null,
@@ -507,6 +515,7 @@ public class Client extends GameShell {
 	private final int[] xpDropAmount = new int[XP_DROP_COUNT];
 	private final int[] xpDropStartCycle = new int[XP_DROP_COUNT];
 	private final Pix32[] xpDropSkillIcons = new Pix32[Stats.COUNT];
+	private boolean xpDropCustomSkillIconsAttempted;
 	private boolean xpDropSkillIconsLoaded;
 
 	@ObfuscatedName("client.gi")
@@ -778,6 +787,12 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.ke")
 	public int orbitCameraZ;
+
+	// Orbit camera target at the start of the current logic tick, so the render
+	// loop can interpolate the camera in lockstep with the (interpolated) local
+	// player position in 60fps mode. Updated each tick in followCamera().
+	private int prevOrbitCameraX;
+	private int prevOrbitCameraZ;
 
 	@ObfuscatedName("client.le")
 	public int sendCameraDelay;
@@ -1494,6 +1509,16 @@ public class Client extends GameShell {
 
 	// GL renderer — null until load() initialises it
 	private GLRenderer glRenderer;
+	private String discordLastArea = "";
+	private int discordLastLevel = -1;
+	private int discordLastUpdate = 0;
+	private int entityAnimationStep = 1;
+	private int entityAnimationStepAccumulator;
+	private int queuedGroundTakeX = -1;
+	private int queuedGroundTakeZ = -1;
+	private int[] queuedGroundTakeIds;
+	private int queuedGroundTakeCount;
+	private int queuedGroundTakeIndex;
 
 	// ----
 
@@ -1637,25 +1662,29 @@ public class Client extends GameShell {
 				} catch (Exception var73) {
 				}
 			}
-			this.drawProgress("Requesting models", 70);
-			int var20 = this.onDemand.getFileCount(0);
-			for (int var21 = 0; var21 < var20; var21++) {
-				int var22 = this.onDemand.getModelFlags(var21);
-				if (var22 != 0) {
-					this.onDemand.request(0, var21);
+			if (!FAST_STARTUP) {
+				this.drawProgress("Requesting models", 70);
+				int var20 = this.onDemand.getFileCount(0);
+				for (int var21 = 0; var21 < var20; var21++) {
+					int var22 = this.onDemand.getModelFlags(var21);
+					if (var22 != 0) {
+						this.onDemand.request(0, var21);
+					}
 				}
-			}
-			int var23 = this.onDemand.remaining();
-			while (this.onDemand.remaining() > 0) {
-				int var24 = var23 - this.onDemand.remaining();
-				if (var24 > 0) {
-					this.drawProgress("Loading models - " + var24 * 100 / var23 + "%", 70);
+				int var23 = this.onDemand.remaining();
+				while (this.onDemand.remaining() > 0) {
+					int var24 = var23 - this.onDemand.remaining();
+					if (var24 > 0) {
+						this.drawProgress("Loading models - " + var24 * 100 / var23 + "%", 70);
+					}
+					this.onDemandLoop();
+					try {
+						Thread.sleep(100L);
+					} catch (Exception var72) {
+					}
 				}
-				this.onDemandLoop();
-				try {
-					Thread.sleep(100L);
-				} catch (Exception var72) {
-				}
+			} else {
+				this.drawProgress("Preparing models", 70);
 			}
 			if (this.fileStreams[0] != null) {
 				this.drawProgress("Requesting maps", 75);
@@ -1684,33 +1713,35 @@ public class Client extends GameShell {
 					}
 				}
 			}
-			int var27 = this.onDemand.getFileCount(0);
-			for (int var28 = 0; var28 < var27; var28++) {
-				int var29 = this.onDemand.getModelFlags(var28);
-				byte var30 = 0;
-				if ((var29 & 0x8) != 0) {
-					var30 = 10;
-				} else if ((var29 & 0x20) != 0) {
-					var30 = 9;
-				} else if ((var29 & 0x10) != 0) {
-					var30 = 8;
-				} else if ((var29 & 0x40) != 0) {
-					var30 = 7;
-				} else if ((var29 & 0x80) != 0) {
-					var30 = 6;
-				} else if ((var29 & 0x2) != 0) {
-					var30 = 5;
-				} else if ((var29 & 0x4) != 0) {
-					var30 = 4;
+			if (!FAST_STARTUP) {
+				int var27 = this.onDemand.getFileCount(0);
+				for (int var28 = 0; var28 < var27; var28++) {
+					int var29 = this.onDemand.getModelFlags(var28);
+					byte var30 = 0;
+					if ((var29 & 0x8) != 0) {
+						var30 = 10;
+					} else if ((var29 & 0x20) != 0) {
+						var30 = 9;
+					} else if ((var29 & 0x10) != 0) {
+						var30 = 8;
+					} else if ((var29 & 0x40) != 0) {
+						var30 = 7;
+					} else if ((var29 & 0x80) != 0) {
+						var30 = 6;
+					} else if ((var29 & 0x2) != 0) {
+						var30 = 5;
+					} else if ((var29 & 0x4) != 0) {
+						var30 = 4;
+					}
+					if ((var29 & 0x1) != 0) {
+						var30 = 3;
+					}
+					if (var30 != 0) {
+						this.onDemand.prefetchPriority(0, var30, var28);
+					}
 				}
-				if ((var29 & 0x1) != 0) {
-					var30 = 3;
-				}
-				if (var30 != 0) {
-					this.onDemand.prefetchPriority(0, var30, var28);
-				}
+				this.onDemand.prefetchMaps(membersWorld);
 			}
-			this.onDemand.prefetchMaps(membersWorld);
 			if (!lowMem) {
 				int var31 = this.onDemand.getFileCount(2);
 				for (int var32 = 1; var32 < var31; var32++) {
@@ -1937,6 +1968,9 @@ public class Client extends GameShell {
 			glRenderer.beginFrame(this.ingame && drawScene, drawScene);
 		}
 		drawCycle++;
+		// Publish the render-time interpolation state for entity model building.
+		ClientEntity.renderInterpOn = GLRenderer.settingFps60Enabled;
+		ClientEntity.renderInterp = GLRenderer.settingFps60Enabled ? super.subTickFraction : 0f;
 		if (this.ingame) {
 			this.gameDraw();
 		} else {
@@ -2901,6 +2935,7 @@ public class Client extends GameShell {
 			if (this.packetCycle > 750) {
 				this.tryReconnect();
 			}
+			this.updateEntityAnimationStep();
 			this.movePlayers();
 			this.moveNpcs();
 			this.timeoutChat();
@@ -2978,10 +3013,14 @@ public class Client extends GameShell {
 							this.out.p2(this.hoveredSlot);
 							this.out.p1(var22);
 						}
-					} else if ((this.oneMouseButton == 1 || this.isAddFriendOption(this.menuSize - 1)) && this.menuSize > 2) {
+					} else {
+						if (this.handleShiftClick()) {
+							// handled
+						} else if ((this.oneMouseButton == 1 || this.isAddFriendOption(this.menuSize - 1)) && this.menuSize > 2) {
 						this.showContextMenu();
-					} else if (this.menuSize > 0) {
-						this.useMenuOption(this.menuSize - 1);
+						} else if (this.menuSize > 0) {
+							this.useMenuOption(this.menuSize - 1);
+						}
 					}
 					this.selectedCycle = 10;
 					super.mouseClickButton = 0;
@@ -3028,13 +3067,15 @@ public class Client extends GameShell {
 			}
 			this.handleInputKey();
 			super.idleCycles++;
-			if (super.idleCycles > 4500) {
+			int afkTimeout = GLRenderer.afkTimeoutCycles;
+			if (afkTimeout > 0 && super.idleCycles > afkTimeout) {
 				ClientDebugger.onIdleTimeout(super.idleCycles);
 				this.pendingLogout = 250;
 				super.idleCycles -= 500;
 				// IDLE_TIMER
 				this.out.pIsaac(144);
 			}
+			updateDiscordRichPresence();
 			this.macroCameraCycle++;
 			if (this.macroCameraCycle > 500) {
 				this.macroCameraCycle = 0;
@@ -3880,6 +3921,9 @@ public class Client extends GameShell {
 					}
 				}
 			}
+			if (var2 == 1 && this.handleShiftClick()) {
+				return;
+			}
 			if (var2 == 1 && (this.oneMouseButton == 1 || this.isAddFriendOption(this.menuSize - 1)) && this.menuSize > 2) {
 				var2 = 2;
 			}
@@ -4167,6 +4211,10 @@ public class Client extends GameShell {
 	@ObfuscatedName("client.f(I)V")
 	public void followCamera() {
 		try {
+			// Snapshot the camera target before this tick eases it, for render-time
+			// interpolation (see interpOrbitCameraX/Z).
+			this.prevOrbitCameraX = this.orbitCameraX;
+			this.prevOrbitCameraZ = this.orbitCameraZ;
 			int var2 = localPlayer.x + this.macroCameraX;
 			int var3 = localPlayer.z + this.macroCameraZ;
 			if (this.orbitCameraX - var2 < -500 || this.orbitCameraX - var2 > 500 || this.orbitCameraZ - var3 < -500 || this.orbitCameraZ - var3 > 500) {
@@ -4615,7 +4663,59 @@ public class Client extends GameShell {
 	}
 
 	@ObfuscatedName("client.a(BLz;I)V")
+	/**
+	 * Whether the entity's position should be interpolated this render frame, i.e.
+	 * 60fps mode is on and the move since last tick is a normal step (not a teleport
+	 * or exact-move snap, which would streak across the map).
+	 */
+	private boolean shouldInterpScenePos(ClientEntity arg0) {
+		if (!ClientEntity.renderInterpOn) {
+			return false;
+		}
+		int dx = arg0.x - arg0.prevSceneX;
+		int dz = arg0.z - arg0.prevSceneZ;
+		return dx <= 64 && dx >= -64 && dz <= 64 && dz >= -64;
+	}
+
+	/** Render-time interpolated scene X (falls back to the exact logic position). */
+	private int interpSceneX(ClientEntity arg0) {
+		if (!this.shouldInterpScenePos(arg0)) {
+			return arg0.x;
+		}
+		return arg0.prevSceneX + Math.round((arg0.x - arg0.prevSceneX) * super.subTickFraction);
+	}
+
+	/** Render-time interpolated scene Z (falls back to the exact logic position). */
+	private int interpSceneZ(ClientEntity arg0) {
+		if (!this.shouldInterpScenePos(arg0)) {
+			return arg0.z;
+		}
+		return arg0.prevSceneZ + Math.round((arg0.z - arg0.prevSceneZ) * super.subTickFraction);
+	}
+
+	/** Render-time interpolated orbit camera X (falls back on snaps / when off). */
+	private int interpOrbitCameraX() {
+		int d = this.orbitCameraX - this.prevOrbitCameraX;
+		if (!ClientEntity.renderInterpOn || d > 256 || d < -256) {
+			return this.orbitCameraX;
+		}
+		return this.prevOrbitCameraX + Math.round(d * super.subTickFraction);
+	}
+
+	/** Render-time interpolated orbit camera Z (falls back on snaps / when off). */
+	private int interpOrbitCameraZ() {
+		int d = this.orbitCameraZ - this.prevOrbitCameraZ;
+		if (!ClientEntity.renderInterpOn || d > 256 || d < -256) {
+			return this.orbitCameraZ;
+		}
+		return this.prevOrbitCameraZ + Math.round(d * super.subTickFraction);
+	}
+
 	public void moveEntity(ClientEntity arg1, int arg2) {
+		// Remember where the entity was before this tick's movement so the render
+		// loop can interpolate its position between 50fps logic ticks (60fps mode).
+		arg1.prevSceneX = arg1.x;
+		arg1.prevSceneZ = arg1.z;
 		if (arg1.x < 128 || arg1.z < 128 || arg1.x >= 13184 || arg1.z >= 13184) {
 			arg1.primarySeqId = -1;
 			arg1.spotanimId = -1;
@@ -4887,7 +4987,7 @@ public class Client extends GameShell {
 				arg1.spotanimFrame = 0;
 			}
 			SeqType var4 = SpotAnimType.list[arg1.spotanimId].seq;
-			arg1.spotanimCycle++;
+			arg1.spotanimCycle += this.entityAnimationStep;
 			while (arg1.spotanimFrame < var4.numFrames && arg1.spotanimCycle > var4.getDuration(arg1.spotanimFrame)) {
 				arg1.spotanimCycle -= var4.getDuration(arg1.spotanimFrame);
 				arg1.spotanimFrame++;
@@ -4905,7 +5005,7 @@ public class Client extends GameShell {
 		}
 		if (arg1.primarySeqId != -1 && arg1.primarySeqDelay == 0) {
 			SeqType var6 = SeqType.list[arg1.primarySeqId];
-			arg1.primarySeqCycle++;
+			arg1.primarySeqCycle += this.entityAnimationStep;
 			while (arg1.primarySeqFrame < var6.numFrames && arg1.primarySeqCycle > var6.getDuration(arg1.primarySeqFrame)) {
 				arg1.primarySeqCycle -= var6.getDuration(arg1.primarySeqFrame);
 				arg1.primarySeqFrame++;
@@ -4925,6 +5025,20 @@ public class Client extends GameShell {
 		if (arg1.primarySeqDelay > 0) {
 			arg1.primarySeqDelay--;
 		}
+	}
+
+	@Override
+	protected boolean isHighFpsEnabled() {
+		return GLRenderer.settingFps60Enabled;
+	}
+
+	private void updateEntityAnimationStep() {
+		// Animations always advance at native speed (one cycle per logic tick).
+		// In 60fps mode the extra smoothness comes from render-time keyframe
+		// interpolation (Model.animateInterpolated / ClientEntity.seqInterpWeight),
+		// not from advancing the frame counters faster.
+		this.entityAnimationStep = 1;
+		this.entityAnimationStepAccumulator = 0;
 	}
 
 	@ObfuscatedName("client.D(I)V")
@@ -5422,7 +5536,14 @@ public class Client extends GameShell {
 				var2 = this.cameraModifierWobbleScale[4] + 128;
 			}
 			int var3 = this.orbitCameraYaw + this.macroCameraAngle & 0x7FF;
-			this.camFollow(var2, this.orbitCameraX, this.getAvH(localPlayer.z, this.minusedlevel, localPlayer.x) - 50, this.orbitCameraZ, var2 * 3 + 600, var3);
+			// Interpolate the camera target (and the focus height from the local
+			// player's interpolated position) so the camera tracks smoothly at the
+			// render rate instead of stepping at 50fps.
+			int camX = this.interpOrbitCameraX();
+			int camZ = this.interpOrbitCameraZ();
+			int focusX = this.interpSceneX(localPlayer);
+			int focusZ = this.interpSceneZ(localPlayer);
+			this.camFollow(var2, camX, this.getAvH(focusZ, this.minusedlevel, focusX) - 50, camZ, var2 * 3 + 600, var3);
 		}
 		int var4;
 		if (this.cutscene) {
@@ -5522,8 +5643,10 @@ public class Client extends GameShell {
 							}
 							this.tileLastOccupiedCycle[var7][var8] = this.sceneCycle;
 						}
-						var5.y = this.getAvH(var5.z, this.minusedlevel, var5.x);
-						this.world.addDynamic(var5.yaw, var6, 60, var5.x, var5, var5.y, this.minusedlevel, var5.needsForwardDrawPadding, var5.z);
+						int rx = this.interpSceneX(var5);
+						int rz = this.interpSceneZ(var5);
+						var5.y = this.getAvH(rz, this.minusedlevel, rx);
+						this.world.addDynamic(var5.yaw, var6, 60, rx, var5, var5.y, this.minusedlevel, var5.needsForwardDrawPadding, rz);
 					} else {
 						var5.lowMemory = false;
 						var5.y = this.getAvH(var5.z, this.minusedlevel, var5.x);
@@ -5549,7 +5672,9 @@ public class Client extends GameShell {
 						}
 						this.tileLastOccupiedCycle[var6][var7] = this.sceneCycle;
 					}
-					this.world.addDynamic(var4.yaw, var5, (var4.size - 1) * 64 + 60, var4.x, var4, this.getAvH(var4.z, this.minusedlevel, var4.x), this.minusedlevel, var4.needsForwardDrawPadding, var4.z);
+					int rx = this.interpSceneX(var4);
+					int rz = this.interpSceneZ(var4);
+					this.world.addDynamic(var4.yaw, var5, (var4.size - 1) * 64 + 60, rx, var4, this.getAvH(rz, this.minusedlevel, rx), this.minusedlevel, var4.needsForwardDrawPadding, rz);
 				}
 			}
 		}
@@ -6132,43 +6257,73 @@ public class Client extends GameShell {
 	}
 
 	private void loadCustomXpDropIcons() {
-		if (this.xpDropSkillIconsLoaded) {
+		if (this.xpDropSkillIconsLoaded || this.xpDropCustomSkillIconsAttempted) {
 			return;
 		}
-		int size = 16;
-		boolean anyLoaded = false;
-		for (int skill = 0; skill < SKILL_ICON_FILENAMES.length; skill++) {
-			String name = SKILL_ICON_FILENAMES[skill];
-			if (name == null) continue;
-			try (InputStream is = Client.class.getResourceAsStream("/skillicons/" + name + ".png")) {
-				if (is == null) continue;
-				BufferedImage src = ImageIO.read(is);
-				int srcW = src.getWidth();
-				int srcH = src.getHeight();
-				double scale = (double) size / Math.max(srcW, srcH);
-				int dstW = Math.max(1, (int) Math.round(srcW * scale));
-				int dstH = Math.max(1, (int) Math.round(srcH * scale));
-				BufferedImage scaled = new BufferedImage(dstW, dstH, BufferedImage.TYPE_INT_ARGB);
-				Graphics2D g2 = scaled.createGraphics();
-				g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-				g2.drawImage(src, 0, 0, dstW, dstH, null);
-				g2.dispose();
-				Pix32 pix = new Pix32(dstW, dstH);
-				scaled.getRGB(0, 0, dstW, dstH, pix.data, 0, dstW);
-				for (int j = 0; j < pix.data.length; j++) {
-					int argb = pix.data[j];
-					int rgb = argb & 0xFFFFFF;
-					pix.data[j] = ((argb >>> 24) < 128) ? 0 : (rgb == 0 ? 1 : rgb);
+		this.xpDropCustomSkillIconsAttempted = true;
+		boolean allLoaded = true;
+		for (int skill = 0; skill < XP_DROP_SMALL_SKILL_ICON_FILENAMES.length; skill++) {
+			String smallName = XP_DROP_SMALL_SKILL_ICON_FILENAMES[skill];
+			if (smallName == null) continue;
+			Pix32 icon = this.loadXpDropIconResource("/skill_icons_small/" + smallName + ".png", false, true);
+			if (icon == null) {
+				String legacyName = XP_DROP_LEGACY_SKILL_ICON_FILENAMES[skill];
+				if (legacyName != null) {
+					icon = this.loadXpDropIconResource("/skillicons/" + legacyName + ".png", true, false);
 				}
-				this.xpDropSkillIcons[skill] = pix;
-				anyLoaded = true;
-			} catch (Exception e) {
-				System.err.println("[skillicons] Failed to load " + name + ": " + e.getMessage());
+			}
+			if (icon == null) {
+				allLoaded = false;
+			} else {
+				this.xpDropSkillIcons[skill] = icon;
 			}
 		}
-		if (anyLoaded) {
+		if (allLoaded) {
 			this.xpDropSkillIconsLoaded = true;
 		}
+	}
+
+	private Pix32 loadXpDropIconResource(String path, boolean allowUpscale, boolean transparentBlack) {
+		int size = 16;
+		try (InputStream is = Client.class.getResourceAsStream(path)) {
+			if (is == null) return null;
+			BufferedImage src = ImageIO.read(is);
+			int srcW = src.getWidth();
+			int srcH = src.getHeight();
+			double scale = allowUpscale
+					? (double) size / Math.max(srcW, srcH)
+					: Math.min(1.0, (double) size / Math.max(srcW, srcH));
+			int dstW = Math.max(1, (int) Math.round(srcW * scale));
+			int dstH = Math.max(1, (int) Math.round(srcH * scale));
+			BufferedImage scaled = new BufferedImage(dstW, dstH, BufferedImage.TYPE_INT_ARGB);
+			Graphics2D g2 = scaled.createGraphics();
+			Object interpolation = scale == 1.0
+					? RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR
+					: RenderingHints.VALUE_INTERPOLATION_BICUBIC;
+			g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, interpolation);
+			g2.drawImage(src, 0, 0, dstW, dstH, null);
+			g2.dispose();
+			Pix32 pix = new Pix32(dstW, dstH);
+			scaled.getRGB(0, 0, dstW, dstH, pix.data, 0, dstW);
+			for (int j = 0; j < pix.data.length; j++) {
+				int argb = pix.data[j];
+				int rgb = argb & 0xFFFFFF;
+				pix.data[j] = ((argb >>> 24) < 128 || transparentBlack && isNearBlack(rgb))
+						? 0
+						: (rgb == 0 ? 1 : rgb);
+			}
+			return pix;
+		} catch (Exception e) {
+			System.err.println("[skillicons] Failed to load " + path + ": " + e.getMessage());
+			return null;
+		}
+	}
+
+	private static boolean isNearBlack(int rgb) {
+		int red = rgb >> 16 & 0xFF;
+		int green = rgb >> 8 & 0xFF;
+		int blue = rgb & 0xFF;
+		return red <= 8 && green <= 8 && blue <= 8;
 	}
 
 	private void loadXpDropSkillIcons() {
@@ -8031,6 +8186,7 @@ public class Client extends GameShell {
 						this.objStacks[this.minusedlevel][var36][var37] = null;
 					}
 					this.showObject(var36, var37);
+					this.continueQueuedGroundTake(var36, var37);
 				}
 			}
 		} else if (arg0 == 37) {
@@ -8925,6 +9081,187 @@ public class Client extends GameShell {
 			var3 -= 2000;
 		}
 		return var3 == 605;
+	}
+
+	private int shiftClickMenuIndex() {
+		if (!GLRenderer.shiftKeyDown) {
+			return -1;
+		}
+		for (int i = this.menuSize - 1; i >= 0; i--) {
+			if (matchesShiftClickSetting(i)) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/**
+	 * Executes the shift-left-click action for the current menu, if one is enabled
+	 * and matched. Returns true if it handled the click. "Take" loots every ground
+	 * item on the tile in one go; all other actions perform their single matched
+	 * menu option.
+	 */
+	private boolean handleShiftClick() {
+		int shiftIndex = this.shiftClickMenuIndex();
+		if (shiftIndex < 0) {
+			return false;
+		}
+		int action = this.menuAction[shiftIndex];
+		if (action >= 2000) {
+			action -= 2000;
+		}
+		if (GLRenderer.settingShiftTakeGround && action == 617) {
+			this.takeAllGroundItems(this.menuParamB[shiftIndex], this.menuParamC[shiftIndex]);
+			return true;
+		}
+		this.useMenuOption(shiftIndex);
+		return true;
+	}
+
+	private void takeAllGroundItems(int tileX, int tileZ) {
+		if (tileX < 0 || tileX >= 104 || tileZ < 0 || tileZ >= 104) {
+			return;
+		}
+		LinkList stack = this.objStacks[this.minusedlevel][tileX][tileZ];
+		if (stack == null) {
+			return;
+		}
+		int[] ids = new int[32];
+		int count = 0;
+		for (ClientObj obj = (ClientObj) stack.head(); obj != null; obj = (ClientObj) stack.next()) {
+			if (count == ids.length) {
+				int[] grown = new int[ids.length * 2];
+				System.arraycopy(ids, 0, grown, 0, ids.length);
+				ids = grown;
+			}
+			ids[count++] = obj.id;
+		}
+		if (count == 0) {
+			return;
+		}
+		this.queuedGroundTakeX = tileX;
+		this.queuedGroundTakeZ = tileZ;
+		this.queuedGroundTakeIds = ids;
+		this.queuedGroundTakeCount = count;
+		this.queuedGroundTakeIndex = count - 1;
+		this.sendQueuedGroundTake(true);
+	}
+
+	private void continueQueuedGroundTake(int tileX, int tileZ) {
+		if (tileX != this.queuedGroundTakeX || tileZ != this.queuedGroundTakeZ || this.queuedGroundTakeIds == null) {
+			return;
+		}
+		this.sendQueuedGroundTake(false);
+	}
+
+	private void sendQueuedGroundTake(boolean includeMovement) {
+		if (this.queuedGroundTakeIds == null || this.queuedGroundTakeIndex < 0) {
+			this.clearQueuedGroundTake();
+			return;
+		}
+		int tileX = this.queuedGroundTakeX;
+		int tileZ = this.queuedGroundTakeZ;
+		if (includeMovement) {
+			boolean moved = this.tryMove(0, 0, 0, tileX, 2, localPlayer.routeTileZ[0], localPlayer.routeTileX[0], tileZ, false, 0, 0);
+			if (!moved) {
+				this.tryMove(0, 1, 0, tileX, 2, localPlayer.routeTileZ[0], localPlayer.routeTileX[0], tileZ, false, 1, 0);
+			}
+			this.crossX = super.mouseClickX;
+			this.crossY = super.mouseClickY;
+			this.crossMode = 2;
+			this.crossCycle = 0;
+		}
+		int id = this.queuedGroundTakeIds[this.queuedGroundTakeIndex--];
+		this.out.pIsaac(178); // OPOBJ3 / Take
+		this.out.p2(tileX + this.sceneBaseTileX);
+		this.out.p2(tileZ + this.sceneBaseTileZ);
+		this.out.p2(id);
+	}
+
+	private void clearQueuedGroundTake() {
+		this.queuedGroundTakeX = -1;
+		this.queuedGroundTakeZ = -1;
+		this.queuedGroundTakeIds = null;
+		this.queuedGroundTakeCount = 0;
+		this.queuedGroundTakeIndex = -1;
+	}
+
+	private boolean matchesShiftClickSetting(int index) {
+		if (index < 0 || index >= this.menuSize || this.menuOption[index] == null) {
+			return false;
+		}
+		int action = this.menuAction[index];
+		if (action >= 2000) {
+			action -= 2000;
+		}
+		String option = stripMenuTags(this.menuOption[index]).toLowerCase();
+		if (GLRenderer.settingShiftDropInventory && action == 100 && option.startsWith("drop ")) {
+			return true;
+		}
+		if (GLRenderer.settingShiftTakeGround && action == 617 && option.startsWith("take ")) {
+			return true;
+		}
+		if (GLRenderer.settingShiftAttackNpc && isNpcAction(action) && option.startsWith("attack ")) {
+			return true;
+		}
+		if (GLRenderer.settingShiftPickpocketNpc && isNpcAction(action) && option.startsWith("pickpocket ")) {
+			return true;
+		}
+		if (GLRenderer.settingShiftBankNpc && isNpcAction(action) && option.startsWith("bank ")) {
+			return true;
+		}
+		if (GLRenderer.settingShiftUseQuicklyBankBooth && isLocAction(action) && option.startsWith("use-quickly ")) {
+			return true;
+		}
+		// Examine is unambiguous by its option text, so match it for any object
+		// type (inventory item, ground item, loc, npc) rather than by action code.
+		return GLRenderer.settingShiftExamineAnything && option.startsWith("examine ");
+	}
+
+	private static boolean isNpcAction(int action) {
+		return action == 242 || action == 209 || action == 309 || action == 852 || action == 793;
+	}
+
+	private static boolean isLocAction(int action) {
+		return action == 625 || action == 721 || action == 743 || action == 357 || action == 1071;
+	}
+
+	private static String stripMenuTags(String s) {
+		return s.replaceAll("@...@", "").trim();
+	}
+
+	private void updateDiscordRichPresence() {
+		if (!GLRenderer.settingDiscordRichPresence || !this.ingame || localPlayer == null) {
+			return;
+		}
+		int tileX = this.sceneBaseTileX + (localPlayer.x >> 7);
+		int tileZ = this.sceneBaseTileZ + (localPlayer.z >> 7);
+		String area = areaName(tileX, tileZ);
+		int level = localPlayer.combatLevel;
+		boolean areaChanged = !area.equals(this.discordLastArea);
+		boolean levelChanged = level != this.discordLastLevel && this.discordLastLevel != -1;
+		if (areaChanged || levelChanged || loopCycle - this.discordLastUpdate >= 200) {
+			this.discordLastArea = area;
+			this.discordLastLevel = level;
+			this.discordLastUpdate = loopCycle;
+			String name = localPlayer.name != null ? localPlayer.name : this.loginUser;
+			GLRenderer.updateDiscordActivity(name + " (Level " + level + ")", "in " + area);
+		}
+	}
+
+	private static String areaName(int x, int z) {
+		if (x >= 3200 && x <= 3265 && z >= 3200 && z <= 3265) return "Lumbridge";
+		if (x >= 3140 && x <= 3215 && z >= 3410 && z <= 3515) return "Varrock";
+		if (x >= 2940 && x <= 3060 && z >= 3310 && z <= 3395) return "Falador";
+		if (x >= 3080 && x <= 3135 && z >= 3480 && z <= 3525) return "Edgeville";
+		if (x >= 3050 && x <= 3135 && z >= 3200 && z <= 3295) return "Draynor";
+		if (x >= 3260 && x <= 3335 && z >= 3150 && z <= 3225) return "Al Kharid";
+		if (x >= 2800 && x <= 2875 && z >= 3420 && z <= 3510) return "Catherby";
+		if (x >= 2600 && x <= 2675 && z >= 3270 && z <= 3335) return "Ardougne";
+		if (x >= 2940 && x <= 3015 && z >= 3350 && z <= 3405) return "Port Sarim";
+		if (x >= 2940 && x <= 3015 && z >= 3200 && z <= 3265) return "Rimmington";
+		if (z >= 3520) return "Wilderness";
+		return "Gielinor";
 	}
 
 	@ObfuscatedName("client.a(BI)V")

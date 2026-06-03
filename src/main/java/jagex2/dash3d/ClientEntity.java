@@ -13,6 +13,11 @@ public class ClientEntity extends ModelSource {
 	@ObfuscatedName("z.p")
 	public int z;
 
+	/** Scene position at the start of the current logic tick, for 60fps render-time
+	 *  position interpolation. Updated each tick in Client.moveEntity. */
+	public int prevSceneX;
+	public int prevSceneZ;
+
 	@ObfuscatedName("z.q")
 	public int yaw;
 
@@ -171,6 +176,79 @@ public class ClientEntity extends ModelSource {
 
 	@ObfuscatedName("z.A")
 	public String chatMessage;
+
+	// ---- Render-time animation interpolation (60fps "smooth" mode) ----
+	/** Sub-tick fraction in [0,1] through the current 50fps logic tick. */
+	public static float renderInterp = 0f;
+	/** Whether animation interpolation is active this frame. */
+	public static boolean renderInterpOn = false;
+	/** Scratch output of {@link #seqInterpWeight}: the AnimFrame id to blend FROM. */
+	public int interpFromFrame = -1;
+	// Lag-interpolation state: the keyframe currently displayed and the one shown
+	// just before it, tracked separately for the primary and secondary sequences.
+	private int interpObservedPrimary = -1;
+	private int interpPrevPrimary = -1;
+	private int interpObservedSecondary = -1;
+	private int interpPrevSecondary = -1;
+
+	/**
+	 * Lag interpolation: blends FROM the keyframe shown just before the current
+	 * one TO the current keyframe, across the current frame's hold window. Returns
+	 * the blend weight (0..256) and sets {@link #interpFromFrame} to the frame to
+	 * blend from; the caller renders {@code animateInterpolated(interpFromFrame,
+	 * currentFrame, weight)}.
+	 *
+	 * <p>Because it always blends between two frames that were actually displayed,
+	 * it handles every transition the same way — normal advances, loop wraps, and
+	 * even server-driven restarts (which jump the frame backwards) — with no
+	 * special cases. Returns 0 with interpFromFrame = -1 when there is nothing to
+	 * interpolate (interpolation off, or no distinct previous frame yet), so the
+	 * caller falls back to a plain single frame.
+	 */
+	public int seqInterpWeight(SeqType seq, int frameIndex, int cycle, boolean secondary) {
+		this.interpFromFrame = -1;
+		if (seq == null || frameIndex < 0 || frameIndex >= seq.numFrames) {
+			return 0;
+		}
+		int curFrame = seq.frames[frameIndex];
+		// Track the previous distinct keyframe. Kept up to date every render (even
+		// when interpolation is off) so it's correct the instant it's re-enabled.
+		int prev;
+		if (secondary) {
+			if (curFrame != this.interpObservedSecondary) {
+				this.interpPrevSecondary = this.interpObservedSecondary;
+				this.interpObservedSecondary = curFrame;
+			}
+			prev = this.interpPrevSecondary;
+		} else {
+			if (curFrame != this.interpObservedPrimary) {
+				this.interpPrevPrimary = this.interpObservedPrimary;
+				this.interpObservedPrimary = curFrame;
+			}
+			prev = this.interpPrevPrimary;
+		}
+		if (!renderInterpOn || renderInterp < 0f || prev == -1 || prev == curFrame) {
+			return 0;
+		}
+		int duration = seq.getDuration(frameIndex);
+		if (duration <= 0) {
+			return 0;
+		}
+		// Continuous position through the current frame's hold window, in [0,1].
+		// Secondary cycles run 0..duration (duration+1 windows); primary cycles run
+		// 1..duration. At pos 0 the previous frame is shown, at pos 1 the current.
+		float pos = secondary
+				? (cycle + renderInterp) / (float) (duration + 1)
+				: (cycle - 1 + renderInterp) / (float) duration;
+		if (pos < 0f) {
+			pos = 0f;
+		}
+		if (pos > 1f) {
+			pos = 1f;
+		}
+		this.interpFromFrame = prev;
+		return (int) (pos * 256f);
+	}
 
 	@ObfuscatedName("z.a(IIZZ)V")
 	public void teleport(int arg0, int arg1, boolean arg3) {

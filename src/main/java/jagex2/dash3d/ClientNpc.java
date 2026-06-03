@@ -50,18 +50,28 @@ public class ClientNpc extends ClientEntity {
 	@ObfuscatedName("ab.c(I)Lfb;")
 	public Model getTempModel2() {
 		if (super.primarySeqId >= 0 && super.primarySeqDelay == 0) {
-			int var2 = SeqType.list[super.primarySeqId].frames[super.primarySeqFrame];
+			SeqType var1 = SeqType.list[super.primarySeqId];
+			int var2 = var1.frames[super.primarySeqFrame];
 			int var3 = -1;
 			if (super.secondarySeqId >= 0 && super.secondarySeqId != super.readyanim) {
 				var3 = SeqType.list[super.secondarySeqId].frames[super.secondarySeqFrame];
 			}
-			return this.type.getTempModel(var2, SeqType.list[super.primarySeqId].walkmerge, var3);
-		} else {
-			int var4 = -1;
-			if (super.secondarySeqId >= 0) {
-				var4 = SeqType.list[super.secondarySeqId].frames[super.secondarySeqFrame];
+			if (var3 == -1) {
+				int var4 = this.seqInterpWeight(var1, super.primarySeqFrame, super.primarySeqCycle, false);
+				return this.type.getTempModel(var2, var1.walkmerge, -1, this.interpFromFrame, var4);
 			}
-			return this.type.getTempModel(var4, null, -1);
+			return this.type.getTempModel(var2, var1.walkmerge, var3);
+		} else {
+			int var5 = -1;
+			int var6 = 0;
+			int var7 = -1;
+			if (super.secondarySeqId >= 0) {
+				SeqType var8 = SeqType.list[super.secondarySeqId];
+				var5 = var8.frames[super.secondarySeqFrame];
+				var6 = this.seqInterpWeight(var8, super.secondarySeqFrame, super.secondarySeqCycle, true);
+				var7 = this.interpFromFrame;
+			}
+			return this.type.getTempModel(var5, null, -1, var7, var6);
 		}
 	}
 

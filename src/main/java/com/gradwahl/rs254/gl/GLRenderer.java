@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.prefs.Preferences;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.imageio.ImageIO;
@@ -37,9 +38,12 @@ import javax.swing.SwingUtilities;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.DefaultCaret;
 import javax.swing.text.Element;
+import javax.swing.text.StyleConstants;
 import javax.swing.text.html.HTML;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
+
+import com.gradwahl.rs254.discord.DiscordRichPresence;
 
 import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
 import static org.lwjgl.glfw.GLFW.*;
@@ -71,10 +75,19 @@ public final class GLRenderer implements TriangleRenderer {
     private static final int SIDEBAR_ROW_H   = 36;
     private static final int SIDEBAR_TABS    = 6;
     private static final int TAB_ICON_SIZE   = 22;
+    private static final String DISCORD_APP_ID = "1507449981689270283";
+    private static final String[] AFK_LABELS = {
+            "90 Seconds", "2 Minutes", "5 Minutes", "10 Minutes", "30 Minutes", "Never"
+    };
+    private static final int[] AFK_CYCLES = {
+            4_500, 6_000, 15_000, 30_000, 90_000, -1
+    };
     private static final int LOSTHQ_READER_W    = SIDEBAR_PANEL_W - 8;
-    private static final int LOSTHQ_READER_WIDE = 450; // wider canvas to capture horizontal overflow
+    private static final int LOSTHQ_READER_WIDE = 1280; // wide backing canvas for drag-panning occasional overflow
     private static final int HSCROLL_H          = 10;  // horizontal scrollbar height
-    private static final int LOSTHQ_QUEST_COMPLETE_IMAGE_W = 284;
+    private static final int LOSTHQ_BODY_W       = LOSTHQ_READER_W - 12;
+    private static final int LOSTHQ_QUEST_COMPLETE_IMAGE_W = LOSTHQ_READER_W;
+    private static final int LOSTHQ_CONTENT_IMAGE_W = LOSTHQ_BODY_W - 4;
     private static final int[] XP_TABLE = buildXpTable();
     private static final java.util.Map<String, String[][]> SKILL_UNLOCKS = buildSkillUnlocks();
     private static java.util.Map<String, String[][]> buildSkillUnlocks() {
@@ -272,6 +285,7 @@ public final class GLRenderer implements TriangleRenderer {
         "Fletching", "Fishing",  "Firemaking", "Crafting", "Smithing",
         "Mining",    "Herblore", "Agility",    "Thieving", "Runecrafting"
     };
+    private static final int HSCORE_SKILL_COLUMNS = 3;
 
     // LostHQ toolkit destinations, kept in the same order as the website menu.
     private static final String[] LOSTHQ_ITEMS = {
@@ -464,14 +478,27 @@ public final class GLRenderer implements TriangleRenderer {
     private static final java.awt.Font UI_FONT_TINY = INTER_MEDIUM.deriveFont(7f);
 
     // RuneLite-style client sidebar
+    private static final Preferences SETTINGS_PREFS = Preferences.userNodeForPackage(GLRenderer.class);
+    private static final DiscordRichPresence DISCORD_RPC = new DiscordRichPresence(DISCORD_APP_ID);
+    public static volatile int afkTimeoutCycles = AFK_CYCLES[0];
+    public static volatile boolean shiftKeyDown;
+    public static volatile boolean settingShiftDropInventory;
+    public static volatile boolean settingShiftTakeGround;
+    public static volatile boolean settingShiftAttackNpc;
+    public static volatile boolean settingShiftPickpocketNpc;
+    public static volatile boolean settingShiftBankNpc;
+    public static volatile boolean settingShiftUseQuicklyBankBooth;
+    public static volatile boolean settingShiftExamineAnything;
+    public static volatile boolean settingDiscordRichPresence;
+    public static volatile boolean settingFps60Enabled;
     private boolean sidebarOpen;
     private int     sidebarTab;
     private boolean sidebarGpuEnabled   = true;
-    private boolean sidebarFpsEnabled   = true;
+    private boolean sidebarFpsEnabled   = SETTINGS_PREFS.getBoolean("fps60", false);
     private boolean sidebarRoofsEnabled = true;
     private boolean settingsFullscreen  = false;
-    private boolean settingsShiftClick  = false;
-    private boolean settingsDiscordRp   = false;
+    private boolean settingsAfkDropdownOpen;
+    private int     settingsAfkIndex    = SETTINGS_PREFS.getInt("afkIndex", 0);
 
     // XP session tracking — updated by Client when XP packets arrive
     public static final long[] xpSessionGains = new long[25];
@@ -505,6 +532,10 @@ public final class GLRenderer implements TriangleRenderer {
     private volatile JEditorPane lostHqPage;
     private volatile URI lostHqPageUri;
     private volatile String lostHqHtml;
+    // Click-to-zoom overlay for quest-reward parchment images.
+    // When non-null, a full-screen modal shows the image at high resolution;
+    // any mouse click dismisses it.
+    private volatile BufferedImage lostHqZoomImage;
     private final Set<Integer> lostHqCompletedSteps = new HashSet<>();
     private final Object lostHqProgressLock = new Object();
     private boolean lostHqProgressRefreshScheduled;
@@ -512,6 +543,7 @@ public final class GLRenderer implements TriangleRenderer {
     private long lostHqProgressPageId;
     private volatile int lostHqScrollY;
     private volatile int lostHqScrollX;
+    private volatile int lostHqContentW = LOSTHQ_READER_W;
     private boolean lostHqDragging;
     private boolean lostHqDragMoved;
     private int     lostHqDragLastY;
@@ -573,6 +605,7 @@ public final class GLRenderer implements TriangleRenderer {
         this.maxUiW = screenW + SIDEBAR_PANEL_W + SIDEBAR_RAIL_W;
         this.windowW = screenW + SIDEBAR_RAIL_W;
         this.windowH = screenH;
+        loadSettings();
     }
 
     // -------------------------------------------------------------------------
@@ -647,6 +680,7 @@ public final class GLRenderer implements TriangleRenderer {
 
         setupUIPass();
         setupCallbacks();
+        updateWindowSizeLimits();
         updateOutputViewport();
         glfwShowWindow(window);
     }
@@ -704,6 +738,7 @@ public final class GLRenderer implements TriangleRenderer {
     /** Attach a GameShell so GLFW input events are forwarded to the game. */
     public void setGameShell(GameShell gs) {
         this.shell = gs;
+        gs.setFramerate(50);
     }
 
     @Override
@@ -767,6 +802,7 @@ public final class GLRenderer implements TriangleRenderer {
         if (uiDirectBuf      != null) MemoryUtil.memFree(uiDirectBuf);
         if (sidebarNativeDirect != null) MemoryUtil.memFree(sidebarNativeDirect);
         hiscoresFetcher.shutdownNow();
+        DISCORD_RPC.disconnect();
         glfwFreeCallbacks(window);
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -967,6 +1003,11 @@ public final class GLRenderer implements TriangleRenderer {
 
     private void drawUIOverlay() {
         if (PixMap.uiBuffer == null) return;
+
+        // Draw the quest-reward zoom overlay into uiBuffer BEFORE upload so the
+        // overlay appears on the same frame the user clicked. It writes only to
+        // the 3D viewport area, leaving the chatbox / inventory / sidebar alone.
+        drawLostHqZoomOverlay();
 
         // Upload game UI pixels. drawSidebar() no longer touches uiBuffer, so no backup needed.
         glActiveTexture(GL_TEXTURE0);
@@ -1212,12 +1253,63 @@ public final class GLRenderer implements TriangleRenderer {
         if (img != null) {
             int x = cx - TAB_ICON_SIZE / 2;
             int y = cy - TAB_ICON_SIZE / 2;
+            boolean glow = id == 1 && xpScreenEnabled;
+            if (glow) {
+                drawIconAlphaGlow(img, x, y, TAB_ICON_SIZE, TAB_ICON_SIZE);
+            }
             java.awt.Composite prev = sg.getComposite();
-            sg.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, active ? 1.0f : 0.55f));
+            sg.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, active || glow ? 1.0f : 0.55f));
             sg.drawImage(img, x, y, TAB_ICON_SIZE, TAB_ICON_SIZE, null);
             sg.setComposite(prev);
         } else {
             drawIconScaled(id, cx - 4, cy - 4, 1, active ? 0xFFE89E14 : 0xFFDCDCDC);
+        }
+    }
+
+    private void drawIconAlphaGlow(BufferedImage img, int x, int y, int w, int h) {
+        BufferedImage scaled = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = scaled.createGraphics();
+        try {
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                    java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+            g.drawImage(img, 0, 0, w, h, null);
+        } finally {
+            g.dispose();
+        }
+
+        BufferedImage yellowMask = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        BufferedImage whiteMask = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        for (int py = 0; py < h; py++) {
+            for (int px = 0; px < w; px++) {
+                int alpha = (scaled.getRGB(px, py) >>> 24) & 0xFF;
+                if (alpha == 0) continue;
+                yellowMask.setRGB(px, py, ((alpha * 190 / 255) << 24) | 0x73738B);
+                whiteMask.setRGB(px, py, ((alpha * 150 / 255) << 24) | 0xFFFFFF);
+            }
+        }
+
+        java.awt.Composite prev = sg.getComposite();
+        try {
+            sg.setComposite(java.awt.AlphaComposite.SrcOver);
+            for (int r = 4; r >= 1; r--) {
+                float opacity = 0.12f + (4 - r) * 0.05f;
+                sg.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, opacity));
+                sg.drawImage(yellowMask, x - r, y, w, h, null);
+                sg.drawImage(yellowMask, x + r, y, w, h, null);
+                sg.drawImage(yellowMask, x, y - r, w, h, null);
+                sg.drawImage(yellowMask, x, y + r, w, h, null);
+                sg.drawImage(yellowMask, x - r, y - r, w, h, null);
+                sg.drawImage(yellowMask, x + r, y - r, w, h, null);
+                sg.drawImage(yellowMask, x - r, y + r, w, h, null);
+                sg.drawImage(yellowMask, x + r, y + r, w, h, null);
+            }
+            sg.setComposite(java.awt.AlphaComposite.getInstance(java.awt.AlphaComposite.SRC_OVER, 0.55f));
+            sg.drawImage(whiteMask, x - 1, y, w, h, null);
+            sg.drawImage(whiteMask, x + 1, y, w, h, null);
+            sg.drawImage(whiteMask, x, y - 1, w, h, null);
+            sg.drawImage(whiteMask, x, y + 1, w, h, null);
+        } finally {
+            sg.setComposite(prev);
         }
     }
 
@@ -1243,7 +1335,7 @@ public final class GLRenderer implements TriangleRenderer {
         fillUiRect(railX, 0, 1, screenH, 0xFF363636);
         for (int index = 0; index < SIDEBAR_TABS - 1; index++) {
             int y      = index * SIDEBAR_ROW_H;
-            boolean active = (index == 1) ? xpScreenEnabled : (sidebarOpen && sidebarTab == index);
+            boolean active = index != 1 && sidebarOpen && sidebarTab == index;
             if (active) {
                 fillUiRect(railX + 1, y, SIDEBAR_RAIL_W - 1, SIDEBAR_ROW_H, 0xFF3F3523);
                 fillUiRect(railX + 1, y, 3, SIDEBAR_ROW_H, 0xFFE89E14);
@@ -1293,7 +1385,7 @@ public final class GLRenderer implements TriangleRenderer {
 
         // Skill selector buttons — 2 per row, 10 rows, full skill names at tiny size
         int panelW = sidebarPanelW();
-        int columns = panelW >= 190 ? 2 : 1;
+        int columns = HSCORE_SKILL_COLUMNS;
         int buttonW = (panelW - 20 - (columns - 1) * 4) / columns;
         int buttonRows = (HSCORE_SKILL_LABEL.length + columns - 1) / columns;
         for (int i = 0; i < HSCORE_SKILL_LABEL.length; i++) {
@@ -1304,7 +1396,8 @@ public final class GLRenderer implements TriangleRenderer {
             boolean sel = (i == hiscoresSkill);
             fillUiRect(bx, by, buttonW, 11, sel ? 0xFF3F3523 : 0xFF2A2A2A);
             if (sel) fillUiRect(bx, by, buttonW, 1, 0xFFE89E14);
-            drawUiText(HSCORE_SKILL_LABEL[i], bx + 4, by + 2, 0, sel ? 0xFFE89E14 : 0xFF999999);
+            drawUiTextFittedFull(HSCORE_SKILL_LABEL[i], bx + 4, by + 2,
+                    buttonW - 8, 0, sel ? 0xFFE89E14 : 0xFF999999);
         }
 
         int afterButtons = 52 + buttonRows * 13 + 3;
@@ -1680,6 +1773,7 @@ public final class GLRenderer implements TriangleRenderer {
         resetLostHqProgress();
         lostHqScrollY = 0;
         lostHqScrollX = 0;
+        lostHqContentW = LOSTHQ_READER_W;
         lostHqSearchQuery = "";
         lostHqSearchFocused = false;
         lostHqSearchResults = List.of();
@@ -1715,10 +1809,13 @@ public final class GLRenderer implements TriangleRenderer {
         lostHqLauncher.execute(() -> {
             try {
                 String html;
+                // Prefer bundled HTML — it has local fixes (column widths, link text,
+                // image sizes) applied to fit the narrow sidebar panel.  Fall back to
+                // the live site only if the page isn't bundled.
                 try {
-                    html = fetchLostHqHtml(uri);
-                } catch (Exception networkEx) {
                     html = loadBundledHtml(uri);
+                } catch (Exception bundledEx) {
+                    html = fetchLostHqHtml(uri);
                 }
                 String finalHtml = html;
                 // Use classpath base so relative image src attributes (img/...) load
@@ -1764,10 +1861,23 @@ public final class GLRenderer implements TriangleRenderer {
             html = html.replaceAll("(?is)<img[^>]+class=\"[^\"]*narrowscroll-(?:top|bottom)[^\"]*\"[^>]*>", "");
             // Rewrite absolute /img/... paths to relative so they resolve from the classpath base
             html = html.replaceAll("(?i)(src=[\"'])/img/", "$1img/");
-            return injectCompactCss(wrapLostHqTableCells(wrapLostHqTextNodes(normalizeTableWidths(injectXpTable(normalizeLostHqCanvases(normalizeLostHqImageWidths(html)))))));
+            return prepareLostHqHtml(html);
         } finally {
             conn.disconnect();
         }
+    }
+
+    private static String prepareLostHqHtml(String html) {
+        String prepared = normalizeLostHqInlineWidths(html);
+        prepared = normalizeLostHqLinkSpacing(prepared);
+        prepared = normalizeLostHqImageWidths(prepared);
+        prepared = normalizeLostHqCanvases(prepared);
+        prepared = injectXpTable(prepared);
+        prepared = normalizeLostHqTables(prepared);
+        prepared = wrapLostHqTextNodes(prepared);
+        prepared = wrapLostHqTableCells(prepared);
+        prepared = breakLostHqLongLinkRuns(prepared);
+        return injectCompactCss(prepared);
     }
 
     private static String injectCompactCss(String html) {
@@ -1777,14 +1887,15 @@ public final class GLRenderer implements TriangleRenderer {
         // allowing the table layout engine to distribute column widths and wrap text.
         int w = LOSTHQ_READER_W;
         String compactCss = "<style>\n"
-            + "body { width: " + w + "px; margin: 0; padding: 2px 6px; background: #111; color: #ddd;"
+            + "body { width: " + w + "px; margin: 0; padding: 2px 0; background: #111; color: #ddd;"
             + " font-family: Arial, sans-serif; font-size: 12px; line-height: 1.5; }\n"
             + "div.body, .main-content, .main-page, .quest-container, .row,"
             + " .stone-box, #narrowscroll, .narrowscroll-bg, .narrowscroll-bgimg,"
-            + " .narrowscroll-content { width: " + (w - 12) + "px; margin: 0; padding: 2px; display: block; }\n"
+            + " .narrowscroll-content { width: " + LOSTHQ_BODY_W + "px; margin: 0; padding: 2px; display: block; }\n"
             + ".quest-column { background: #2a2a2a; border: 1px solid #444; margin: 4px 0; padding: 4px; }\n"
-            + "img, canvas { height: auto; display: block; margin: 3px 0; }\n"
-            + "table { width: " + w + "px; margin: 3px 0; border-collapse: collapse; }\n"
+            + "img, canvas { display: block; margin: 3px 0; }\n"
+            + "img.quest-complete { margin-left: -6px; margin-right: -6px; }\n"
+            + "table { width: " + LOSTHQ_BODY_W + "px; margin: 3px 0; border-collapse: collapse; }\n"
             + "td, th { padding: 2px 4px; font-size: 11px; }\n"
             + "th { color: #ffd700; font-weight: bold; border-bottom: 1px solid #444; }\n"
             + "tr:nth-child(even) td { background: #1a1a1a; }\n"
@@ -1800,10 +1911,16 @@ public final class GLRenderer implements TriangleRenderer {
 
     private static String normalizeLostHqImageWidths(String html) {
         // Swing's HTML renderer handles percentage image widths inconsistently.
-        // Keep quest-complete banners at their intended 80% reader-body width.
-        return html.replaceAll(
+        // Pin quest-complete banners to a fixed pixel width that fills the panel,
+        // and tag them with class="quest-complete" so the CSS negative-margin rule
+        // lets them escape the body's 6px horizontal padding.
+        String tagged = html.replaceAll(
+                "(?i)(<img\\b(?![^>]*\\bclass=)[^>]*src=[\"'][^\"']*questimages/quest_complete/[^\"']*[\"'])",
+                "$1 class=\"quest-complete\"");
+        tagged = tagged.replaceAll(
                 "(?i)(<img\\b[^>]*src=[\"'][^\"']*questimages/quest_complete/[^\"']*[\"'][^>]*\\bwidth=[\"'])\\d+%([\"'])",
                 "$1" + LOSTHQ_QUEST_COMPLETE_IMAGE_W + "$2");
+        return clampLostHqImageWidths(tagged);
     }
 
     private static String normalizeLostHqCanvases(String html) {
@@ -1819,6 +1936,13 @@ public final class GLRenderer implements TriangleRenderer {
                         ? (calculatorsIndex ? lostHqSkillCalcGrid() : skillGuidesIndex ? lostHqSkillGuideLinks() : "")
                         : "";
                 matcher.appendReplacement(normalized, Matcher.quoteReplacement(replacement));
+                continue;
+            }
+            // Canvases without show-label are sprite-only display elements (e.g. smithing table
+            // quantity indicators). Emit nothing so narrow columns don't overflow with item text.
+            if (lostHqAttribute(attributes, "show-label") == null
+                    && lostHqAttribute(attributes, "name-replace") == null) {
+                matcher.appendReplacement(normalized, "");
                 continue;
             }
             String label = lostHqAttribute(attributes, "name-replace");
@@ -2001,6 +2125,10 @@ public final class GLRenderer implements TriangleRenderer {
     private static JEditorPane createLostHqPage(String html, URL baseUrl) {
         JEditorPane page = new JEditorPane();
         page.setEditable(false);
+        // Match the body background so any overflow canvas area (between the body
+        // width and LOSTHQ_READER_WIDE) renders dark instead of the default white.
+        page.setBackground(new java.awt.Color(0x111111));
+        page.setOpaque(true);
         // Disable caret: this read-only pane does not need caret repaint layout passes.
         DefaultCaret silentCaret = new DefaultCaret();
         silentCaret.setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
@@ -2042,7 +2170,11 @@ public final class GLRenderer implements TriangleRenderer {
     }
 
     private static String wrapLostHqTextNode(String text) {
-        return wrapLostHqTextNode(text, 36);
+        // 32 chars is the conservative cap for a 312-px body at 11–12 px Arial.
+        // Worst-case (all caps / quoted phrases) ~9 px per glyph: 32 × 9 = 288 px,
+        // which fits comfortably even when this text node is concatenated with a
+        // preceding short fragment (e.g. preamble before an <i>quoted phrase</i>).
+        return wrapLostHqTextNode(text, 32);
     }
 
     private static String wrapLostHqTextNode(String text, int wrapCol) {
@@ -2068,11 +2200,81 @@ public final class GLRenderer implements TriangleRenderer {
         return wrapped.toString();
     }
 
-    // Adds width="100%" HTML attribute to <table> elements that lack one.
-    // Swing's HTMLEditorKit respects HTML width attributes on tables but ignores CSS
-    // percentage widths, so this is the only reliable way to constrain table layout.
-    private static String normalizeTableWidths(String html) {
-        return html.replaceAll("(?i)<table(?![^>]*\\bwidth=)([^>]*)>", "<table width=\"100%\"$1>");
+    private static String clampLostHqImageWidths(String html) {
+        Matcher matcher = Pattern.compile("(?is)<img\\b([^>]*)>").matcher(html);
+        StringBuffer out = new StringBuffer();
+        while (matcher.find()) {
+            String attrs = matcher.group(1);
+            Matcher width = Pattern.compile("(?i)\\bwidth\\s*=\\s*([\"']?)(\\d+|\\d+%)\\1").matcher(attrs);
+            if (width.find()) {
+                String value = width.group(2);
+                int imageW = value.endsWith("%")
+                        ? Math.max(1, LOSTHQ_CONTENT_IMAGE_W * Integer.parseInt(value.substring(0, value.length() - 1)) / 100)
+                        : Math.min(Integer.parseInt(value), LOSTHQ_CONTENT_IMAGE_W);
+                String replacement = "width=\"" + imageW + "\"";
+                attrs = width.replaceFirst(Matcher.quoteReplacement(replacement));
+            } else {
+                String src = lostHqAttribute(attrs, "src");
+                if (src != null && src.contains("questimages/")) {
+                    int imageW = src.contains("quest_complete") ? LOSTHQ_QUEST_COMPLETE_IMAGE_W : LOSTHQ_CONTENT_IMAGE_W;
+                    attrs += " width=\"" + imageW + "\"";
+                }
+            }
+            matcher.appendReplacement(out, Matcher.quoteReplacement("<img" + attrs + ">"));
+        }
+        matcher.appendTail(out);
+        return out.toString();
+    }
+
+    private static String normalizeLostHqInlineWidths(String html) {
+        Matcher matcher = Pattern.compile("(?is)\\sstyle\\s*=\\s*([\"'])(.*?)\\1").matcher(html);
+        StringBuffer out = new StringBuffer();
+        while (matcher.find()) {
+            String style = matcher.group(2)
+                    .replaceAll("(?i)(?:^|;)\\s*(?:min-|max-)?width\\s*:\\s*[^;]+;?", ";")
+                    .replaceAll(";{2,}", ";")
+                    .replaceAll("^\\s*;|;\\s*$", "")
+                    .trim();
+            String replacement = style.isEmpty() ? "" : " style=" + matcher.group(1) + style + matcher.group(1);
+            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(out);
+        return out.toString();
+    }
+
+    private static String normalizeLostHqLinkSpacing(String html) {
+        String spaced = html.replaceAll("(?i)</a>(?=\\S)", "</a> ");
+        spaced = spaced.replaceAll("(?i)(?<=\\S)(<a\\b)", " $1");
+        spaced = spaced.replaceAll("(?i)</a>\\s+(and|or)\\s+(<a\\b)", "</a><br>$1 $2");
+        spaced = spaced.replaceAll("(?i)</a>\\s+([.,;:!?])", "</a>$1");
+        return spaced;
+    }
+
+    private static String breakLostHqLongLinkRuns(String html) {
+        Matcher matcher = Pattern.compile("(?is)([^<>\\r\\n]{16,})\\s+(<a\\b[^>]*>[^<]{4,}</a>)").matcher(html);
+        StringBuffer out = new StringBuffer();
+        while (matcher.find()) {
+            String prefix = matcher.group(1);
+            int lastBreak = Math.max(prefix.toLowerCase().lastIndexOf("<br>"), prefix.lastIndexOf('>'));
+            String visibleRun = prefix.substring(lastBreak + 1).replaceAll("&[^;]+;", "x").trim();
+            String replacement = visibleRun.length() >= 18
+                    ? prefix + "<br>" + matcher.group(2)
+                    : matcher.group(0);
+            matcher.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(out);
+        return out.toString();
+    }
+
+    // Swing's HTMLEditorKit respects HTML table/column width attributes more than
+    // CSS. Normalize scraped fixed-width layouts so every table can fit the reader.
+    private static String normalizeLostHqTables(String html) {
+        String normalized = html.replaceAll("(?i)(<table\\b[^>]*?)\\swidth\\s*=\\s*([\"'])?\\d+%?\\2", "$1");
+        normalized = normalized.replaceAll("(?i)(<table\\b[^>]*?)\\sstyle\\s*=\\s*([\"'])[^\"']*?\\2", "$1");
+        normalized = normalized.replaceAll("(?i)(<col\\b[^>]*?)\\swidth\\s*=\\s*([\"'])?\\d+%?\\2", "$1");
+        normalized = normalized.replaceAll("(?i)<table\\b(?![^>]*\\bwidth=)",
+                "<table width=\"" + LOSTHQ_BODY_W + "\"");
+        return normalized;
     }
 
     // Rewraps text nodes inside <td>/<th> cells at a column-proportional width.
@@ -2098,11 +2300,20 @@ public final class GLRenderer implements TriangleRenderer {
     }
 
     private static int countFirstRowColumns(String tableBody) {
+        // <col> elements directly encode the column count; prefer them over row parsing.
+        Matcher colMatcher = Pattern.compile("(?i)<col\\b").matcher(tableBody);
+        int colCount = 0;
+        while (colMatcher.find()) colCount++;
+        if (colCount > 0) return colCount;
+        // Fall back to counting cells in the first row, expanding colspan values.
         Matcher rowMatcher = Pattern.compile("(?is)<tr\\b[^>]*>(.*?)</tr\\s*>").matcher(tableBody);
         if (!rowMatcher.find()) return 1;
-        Matcher cellMatcher = Pattern.compile("(?i)<t[dh]\\b").matcher(rowMatcher.group(1));
+        Matcher cellMatcher = Pattern.compile("(?i)<t[dh]\\b([^>]*)>").matcher(rowMatcher.group(1));
         int count = 0;
-        while (cellMatcher.find()) count++;
+        while (cellMatcher.find()) {
+            Matcher cs = Pattern.compile("(?i)\\bcolspan=[\"']?(\\d+)").matcher(cellMatcher.group(1));
+            count += cs.find() ? Integer.parseInt(cs.group(1)) : 1;
+        }
         return count > 0 ? count : 1;
     }
 
@@ -2161,7 +2372,7 @@ public final class GLRenderer implements TriangleRenderer {
             // Remove it before injecting the responsive CSS so Swing does not
             // keep laying out narrow maximized panels at the legacy 312px width.
             html = html.replaceFirst("(?is)<style>.*?</style>", "");
-            return injectCompactCss(wrapLostHqTableCells(wrapLostHqTextNodes(normalizeTableWidths(injectXpTable(normalizeLostHqCanvases(normalizeLostHqImageWidths(html)))))));
+            return prepareLostHqHtml(html);
         }
     }
 
@@ -2426,8 +2637,7 @@ public final class GLRenderer implements TriangleRenderer {
             fillUiRect(x + 4, screenH - HSCROLL_H, pageW, HSCROLL_H, 0xFF1A1A1A);
             return;
         }
-        // Track measured content width for scrollbar sizing; default to body width.
-        int contentW = LOSTHQ_READER_W;
+        int contentW = Math.max(LOSTHQ_READER_W, lostHqContentW);
         java.awt.Graphics2D pageGraphics = (java.awt.Graphics2D) sg.create();
         try {
             synchronized (page.getTreeLock()) {
@@ -2439,7 +2649,10 @@ public final class GLRenderer implements TriangleRenderer {
                 page.setSize(LOSTHQ_READER_WIDE, Short.MAX_VALUE);
                 page.setSize(LOSTHQ_READER_WIDE, Math.max(readerVisibleH, page.getPreferredSize().height));
                 int pw = page.getPreferredSize().width;
-                if (pw > LOSTHQ_READER_W) contentW = Math.min(pw, LOSTHQ_READER_WIDE);
+                contentW = lostHqMeasuredContentW(pw);
+                lostHqContentW = contentW;
+                int maxScrollX = Math.max(0, contentW - readerVisibleW);
+                if (lostHqScrollX > maxScrollX) lostHqScrollX = maxScrollX;
                 page.paint(pageGraphics);
             }
         } catch (RuntimeException ignored) {
@@ -2450,7 +2663,7 @@ public final class GLRenderer implements TriangleRenderer {
         // Horizontal scrollbar
         int sbX = x + 4;
         int sbY = screenH - HSCROLL_H;
-        int maxScrollX = Math.max(0, contentW - readerVisibleW);
+        int maxScrollX = lostHqMaxScrollX();
         fillUiRect(sbX, sbY, pageW, HSCROLL_H, 0xFF1A1A1A);
         int thumbW = Math.max(20, pageW * readerVisibleW / Math.max(1, contentW));
         int trackRange = Math.max(1, pageW - thumbW);
@@ -2461,13 +2674,81 @@ public final class GLRenderer implements TriangleRenderer {
     }
 
     private void drawSettingsPanel(int x) {
-        drawUiText("CLIENT SETTINGS", x + 16, 56, 1, 0xFFE89E14);
-        drawToggleRow(x, 72,  "GPU RENDERING",   sidebarGpuEnabled);
-        drawToggleRow(x, 116, "SHOW FPS",         sidebarFpsEnabled);
-        drawToggleRow(x, 160, "SHOW ROOFS",       sidebarRoofsEnabled);
-        drawToggleRow(x, 204, "FULLSCREEN",        settingsFullscreen);
-        drawToggleRow(x, 248, "SHIFT CLICK",       settingsShiftClick);
-        drawToggleRow(x, 292, "DISCORD RP",        settingsDiscordRp);
+        int panelW = sidebarPanelW();
+        int y = 52;
+
+        y = drawSettingsSectionTitle(x, y, "Afk timer");
+        drawSelectBox(x + 16, y, panelW - 32, AFK_LABELS[settingsAfkIndex], settingsAfkDropdownOpen);
+        y += 22;
+        if (settingsAfkDropdownOpen) {
+            for (int i = 0; i < AFK_LABELS.length; i++) {
+                int rowY = y + i * 14;
+                fillUiRect(x + 16, rowY, panelW - 32, 14, i == settingsAfkIndex ? 0xFF3F3523 : 0xFF202020);
+                fillUiRect(x + 16, rowY, panelW - 32, 1, 0xFF363636);
+                drawUiText(AFK_LABELS[i], x + 22, rowY + 3, 0, i == settingsAfkIndex ? 0xFFE89E14 : 0xFFDCDCDC);
+            }
+            y += AFK_LABELS.length * 14 + 4;
+        } else {
+            y += 8;
+        }
+
+        y = drawSettingsSectionTitle(x, y, "Shift Click Actions");
+        y = drawSettingsToggleRow(x, y, "Drop (Inventory Items)", settingShiftDropInventory);
+        y = drawSettingsToggleRow(x, y, "Take (Ground Items)", settingShiftTakeGround);
+        y = drawSettingsToggleRow(x, y, "Attack (NPC's)", settingShiftAttackNpc);
+        y = drawSettingsToggleRow(x, y, "Pickpocket (NPC's)", settingShiftPickpocketNpc);
+        y = drawSettingsToggleRow(x, y, "Bank (Bank NPC'S)", settingShiftBankNpc);
+        y = drawSettingsToggleRow(x, y, "Use-Quickly (Bank Booth's)", settingShiftUseQuicklyBankBooth);
+        y = drawSettingsToggleRow(x, y, "Examine (Anything)", settingShiftExamineAnything);
+        y += 2;
+
+        y = drawSettingsSectionTitle(x, y, "Discord Features");
+        y = drawSettingsToggleRow(x, y, "Discord Rich Presence", settingDiscordRichPresence);
+        y += 2;
+
+        y = drawSettingsSectionTitle(x, y, "Client Settings");
+        y = drawSettingsToggleRow(x, y, "60 Fps Mode", sidebarFpsEnabled);
+        drawSettingsToggleRow(x, y, "Fullscreen Mode", settingsFullscreen);
+    }
+
+    private void loadSettings() {
+        settingsAfkIndex = Math.max(0, Math.min(AFK_LABELS.length - 1, settingsAfkIndex));
+        afkTimeoutCycles = AFK_CYCLES[settingsAfkIndex];
+        settingFps60Enabled = sidebarFpsEnabled;
+        settingShiftDropInventory = SETTINGS_PREFS.getBoolean("shiftDropInventory", false);
+        settingShiftTakeGround = SETTINGS_PREFS.getBoolean("shiftTakeGround", false);
+        settingShiftAttackNpc = SETTINGS_PREFS.getBoolean("shiftAttackNpc", false);
+        settingShiftPickpocketNpc = SETTINGS_PREFS.getBoolean("shiftPickpocketNpc", false);
+        settingShiftBankNpc = SETTINGS_PREFS.getBoolean("shiftBankNpc", false);
+        settingShiftUseQuicklyBankBooth = SETTINGS_PREFS.getBoolean("shiftUseQuicklyBankBooth", false);
+        settingShiftExamineAnything = SETTINGS_PREFS.getBoolean("shiftExamineAnything", false);
+        settingDiscordRichPresence = SETTINGS_PREFS.getBoolean("discordRichPresence", false);
+        if (settingDiscordRichPresence) {
+            DISCORD_RPC.connect();
+        }
+    }
+
+    private int drawSettingsSectionTitle(int x, int y, String title) {
+        drawUiText(title, x + 16, y, 2, 0xFFE89E14);
+        fillUiRect(x + 16, y + 15, sidebarPanelW() - 32, 1, 0xFF363636);
+        return y + 18;
+    }
+
+    private int drawSettingsToggleRow(int x, int y, String text, boolean enabled) {
+        int panelW = sidebarPanelW();
+        drawUiTextFittedFull(text, x + 16, y + 5, panelW - 72, 0, 0xFFDCDCDC);
+        drawToggle(x + panelW - 48, y + 2, enabled);
+        return y + 20;
+    }
+
+    private void drawSelectBox(int x, int y, int w, String text, boolean open) {
+        fillUiRect(x, y, w, 18, 0xFF202020);
+        fillUiRect(x, y, w, 1, 0xFF666666);
+        fillUiRect(x, y + 17, w, 1, 0xFF111111);
+        fillUiRect(x, y, 1, 18, 0xFF4A4A4A);
+        fillUiRect(x + w - 1, y, 1, 18, 0xFF111111);
+        drawUiText(text, x + 7, y + 5, 0, 0xFFDCDCDC);
+        drawUiText(open ? "^" : "v", x + w - 14, y + 5, 0, 0xFFE89E14);
     }
 
     private void drawPluginRow(int x, int y, String name, String description, boolean enabled) {
@@ -2614,6 +2895,51 @@ public final class GLRenderer implements TriangleRenderer {
             g = (argb >> 8)  & 0xFF, b =  argb        & 0xFF;
         sg.setColor(new java.awt.Color(r, g, b, a));
         sg.drawString(text, x, y + fm.getAscent());
+    }
+
+    private void drawUiTextFitted(String text, int x, int y, int maxWidth, int scale, int argb) {
+        if (text == null || text.isEmpty() || maxWidth <= 0) return;
+        int chosenScale = scale;
+        java.awt.Font font = uiFont(chosenScale);
+        java.awt.FontMetrics fm = sg.getFontMetrics(font);
+        if (fm.stringWidth(text) > maxWidth && scale > 0) {
+            chosenScale = 0;
+            font = uiFont(chosenScale);
+            fm = sg.getFontMetrics(font);
+        }
+        String fitted = text;
+        if (fm.stringWidth(fitted) > maxWidth) {
+            String ellipsis = "...";
+            while (!fitted.isEmpty() && fm.stringWidth(fitted + ellipsis) > maxWidth) {
+                fitted = fitted.substring(0, fitted.length() - 1);
+            }
+            fitted = fitted.isEmpty() ? ellipsis : fitted + ellipsis;
+        }
+        drawUiText(fitted, x, y, chosenScale, argb);
+    }
+
+    private void drawUiTextFittedFull(String text, int x, int y, int maxWidth, int scale, int argb) {
+        if (text == null || text.isEmpty() || maxWidth <= 0) return;
+        java.awt.Font font = uiFont(scale);
+        java.awt.FontMetrics fm = sg.getFontMetrics(font);
+        if (fm.stringWidth(text) > maxWidth) {
+            font = UI_FONT_TINY;
+            fm = sg.getFontMetrics(font);
+        }
+        float squeeze = Math.min(1f, maxWidth / (float) Math.max(1, fm.stringWidth(text)));
+
+        java.awt.geom.AffineTransform prevTx = sg.getTransform();
+        try {
+            int a = (argb >> 24) & 0xFF, r = (argb >> 16) & 0xFF,
+                g = (argb >> 8)  & 0xFF, b =  argb        & 0xFF;
+            sg.setColor(new java.awt.Color(r, g, b, a));
+            sg.setFont(font);
+            sg.translate(x, y);
+            sg.scale(squeeze, 1.0);
+            sg.drawString(text, 0, fm.getAscent());
+        } finally {
+            sg.setTransform(prevTx);
+        }
     }
 
     private java.awt.Font uiFont(int scale) {
@@ -2768,8 +3094,9 @@ public final class GLRenderer implements TriangleRenderer {
                 double rs = lostHqReaderScale();
                 int pw = Math.max(1, sidebarPanelW() - 8);
                 int visW = Math.max(1, (int) Math.ceil(pw / rs));
-                int maxSX = Math.max(0, LOSTHQ_READER_WIDE - visW);
-                int thumbW = Math.max(20, pw * visW / LOSTHQ_READER_WIDE);
+                int contentW = Math.max(LOSTHQ_READER_W, lostHqContentW);
+                int maxSX = Math.max(0, contentW - visW);
+                int thumbW = Math.max(20, pw * visW / Math.max(1, contentW));
                 int trackRange = Math.max(1, pw - thumbW);
                 int dx = mouseX - lostHqHScrollAncX;
                 lostHqScrollX = Math.max(0, Math.min(maxSX,
@@ -2841,6 +3168,12 @@ public final class GLRenderer implements TriangleRenderer {
                 int ly = worldMapFullscreen ? toFullscreenLogicalY(py[0]) : toLogicalY(py[0]);
                 cursorX = lx;
                 cursorY = ly;
+                // Quest-reward zoom overlay swallows the first click anywhere on screen
+                // (only relevant in-game; the overlay never appears at the title screen).
+                if (lostHqZoomImage != null && shell instanceof Client && ((Client) shell).ingame) {
+                    lostHqZoomImage = null;
+                    return;
+                }
                 if (worldMapFullscreen) {
                     clickWorldMap(lx, ly);
                     return;
@@ -2903,8 +3236,19 @@ public final class GLRenderer implements TriangleRenderer {
             windowW = width;
             windowH = height;
         });
+        glfwSetWindowMaximizeCallback(window, (win, maximized) -> {
+            updateWindowSizeLimits();
+            if (!maximized && sidebarOpen) {
+                resizeForSidebar();
+            } else {
+                updateOutputViewport();
+            }
+        });
 
         glfwSetKeyCallback(window, (win, key, scancode, action, mods) -> {
+            if (key == GLFW_KEY_LEFT_SHIFT || key == GLFW_KEY_RIGHT_SHIFT) {
+                shiftKeyDown = action != GLFW_RELEASE;
+            }
             if (key == GLFW_KEY_GRAVE_ACCENT) {
                 if (action == GLFW_PRESS) statsOverlayVisible = !statsOverlayVisible;
                 return;
@@ -3076,6 +3420,17 @@ public final class GLRenderer implements TriangleRenderer {
         return screenW + SIDEBAR_RAIL_W + (sidebarOpen ? SIDEBAR_PANEL_W : 0);
     }
 
+    private void updateWindowSizeLimits() {
+        if (window == NULL) return;
+        if (settingsFullscreen || sidebarInsideWindow()) {
+            glfwSetWindowSizeLimits(window, GLFW_DONT_CARE, GLFW_DONT_CARE, GLFW_DONT_CARE, GLFW_DONT_CARE);
+            glfwSetWindowAspectRatio(window, GLFW_DONT_CARE, GLFW_DONT_CARE);
+        } else {
+            glfwSetWindowSizeLimits(window, outputW(), screenH, GLFW_DONT_CARE, GLFW_DONT_CARE);
+            glfwSetWindowAspectRatio(window, outputW(), screenH);
+        }
+    }
+
     private void setOutputViewport(int logicalWidth) {
         int[] width = new int[1];
         int[] height = new int[1];
@@ -3101,6 +3456,7 @@ public final class GLRenderer implements TriangleRenderer {
                 xpScreenEnabled = !xpScreenEnabled;
                 if (sidebarOpen && sidebarTab == 1) {
                     sidebarOpen = false;
+                    updateWindowSizeLimits();
                     resizeForSidebar();
                     updateOutputViewport();
                 }
@@ -3114,6 +3470,7 @@ public final class GLRenderer implements TriangleRenderer {
                 sidebarOpen = true;
                 sidebarTab  = tab;
             }
+            updateWindowSizeLimits();
             resizeForSidebar();
             updateOutputViewport();
             return;
@@ -3126,6 +3483,7 @@ public final class GLRenderer implements TriangleRenderer {
         // Close button (top-right X in the panel header)
         if (x >= sidebarPanelX() + sidebarPanelW() - 22 && y <= 42) {
             sidebarOpen = false;
+            updateWindowSizeLimits();
             resizeForSidebar();
             updateOutputViewport();
             return;
@@ -3135,7 +3493,7 @@ public final class GLRenderer implements TriangleRenderer {
             case 0 -> { // Hiscores – skill selector buttons (2 per row, 10 rows, y=52..181)
                 int px = sidebarPanelX();
                 int panelW = sidebarPanelW();
-                int columns = panelW >= 190 ? 2 : 1;
+                int columns = HSCORE_SKILL_COLUMNS;
                 int buttonW = (panelW - 20 - (columns - 1) * 4) / columns;
                 int relX = x - (px + 10);
                 int relY = y - 52;
@@ -3205,14 +3563,132 @@ public final class GLRenderer implements TriangleRenderer {
                     }
                 }
             }
-            case 5 -> { // Settings toggles (each row is 44 px tall starting at y=72)
-                if (y >= 72  && y < 116) sidebarGpuEnabled   = !sidebarGpuEnabled;
-                if (y >= 116 && y < 160) sidebarFpsEnabled    = !sidebarFpsEnabled;
-                if (y >= 160 && y < 204) sidebarRoofsEnabled  = !sidebarRoofsEnabled;
-                if (y >= 204 && y < 248) toggleFullscreen();
-                if (y >= 248 && y < 292) settingsShiftClick   = !settingsShiftClick;
-                if (y >= 292 && y < 336) settingsDiscordRp    = !settingsDiscordRp;
+            case 5 -> {
+                clickSettingsPanel(x, y);
             }
+        }
+    }
+
+    private void clickSettingsPanel(int x, int y) {
+        int px = sidebarPanelX();
+        int panelW = sidebarPanelW();
+        int rowY = 52;
+
+        rowY += 18;
+        if (x >= px + 16 && x < px + panelW - 16 && y >= rowY && y < rowY + 18) {
+            settingsAfkDropdownOpen = !settingsAfkDropdownOpen;
+            return;
+        }
+        rowY += 22;
+        if (settingsAfkDropdownOpen) {
+            for (int i = 0; i < AFK_LABELS.length; i++) {
+                int optY = rowY + i * 14;
+                if (x >= px + 16 && x < px + panelW - 16 && y >= optY && y < optY + 14) {
+                    setAfkIndex(i);
+                    settingsAfkDropdownOpen = false;
+                    return;
+                }
+            }
+            rowY += AFK_LABELS.length * 14 + 4;
+        } else {
+            rowY += 8;
+        }
+
+        rowY += 18;
+        if (toggleHit(px, rowY, x, y)) { setShiftDropInventory(!settingShiftDropInventory); return; }
+        rowY += 20;
+        if (toggleHit(px, rowY, x, y)) { setShiftTakeGround(!settingShiftTakeGround); return; }
+        rowY += 20;
+        if (toggleHit(px, rowY, x, y)) { setShiftAttackNpc(!settingShiftAttackNpc); return; }
+        rowY += 20;
+        if (toggleHit(px, rowY, x, y)) { setShiftPickpocketNpc(!settingShiftPickpocketNpc); return; }
+        rowY += 20;
+        if (toggleHit(px, rowY, x, y)) { setShiftBankNpc(!settingShiftBankNpc); return; }
+        rowY += 20;
+        if (toggleHit(px, rowY, x, y)) { setShiftUseQuicklyBankBooth(!settingShiftUseQuicklyBankBooth); return; }
+        rowY += 20;
+        if (toggleHit(px, rowY, x, y)) { setShiftExamineAnything(!settingShiftExamineAnything); return; }
+        rowY += 22;
+
+        rowY += 18;
+        if (toggleHit(px, rowY, x, y)) { setDiscordRichPresence(!settingDiscordRichPresence); return; }
+        rowY += 22;
+
+        rowY += 18;
+        if (toggleHit(px, rowY, x, y)) { setFps60(!sidebarFpsEnabled); return; }
+        rowY += 20;
+        if (toggleHit(px, rowY, x, y)) toggleFullscreen();
+    }
+
+    private boolean toggleHit(int px, int rowY, int mouseX, int mouseY) {
+        return mouseX >= px + 8 && mouseX < px + sidebarPanelW() - 8
+                && mouseY >= rowY && mouseY < rowY + 20;
+    }
+
+    private void setAfkIndex(int index) {
+        settingsAfkIndex = Math.max(0, Math.min(AFK_LABELS.length - 1, index));
+        afkTimeoutCycles = AFK_CYCLES[settingsAfkIndex];
+        SETTINGS_PREFS.putInt("afkIndex", settingsAfkIndex);
+    }
+
+    private void setFps60(boolean enabled) {
+        sidebarFpsEnabled = enabled;
+        settingFps60Enabled = enabled;
+        SETTINGS_PREFS.putBoolean("fps60", enabled);
+        if (shell != null) {
+            shell.setFramerate(50);
+        }
+    }
+
+    private void setShiftDropInventory(boolean enabled) {
+        settingShiftDropInventory = enabled;
+        SETTINGS_PREFS.putBoolean("shiftDropInventory", enabled);
+    }
+
+    private void setShiftTakeGround(boolean enabled) {
+        settingShiftTakeGround = enabled;
+        SETTINGS_PREFS.putBoolean("shiftTakeGround", enabled);
+    }
+
+    private void setShiftAttackNpc(boolean enabled) {
+        settingShiftAttackNpc = enabled;
+        SETTINGS_PREFS.putBoolean("shiftAttackNpc", enabled);
+    }
+
+    private void setShiftPickpocketNpc(boolean enabled) {
+        settingShiftPickpocketNpc = enabled;
+        SETTINGS_PREFS.putBoolean("shiftPickpocketNpc", enabled);
+    }
+
+    private void setShiftBankNpc(boolean enabled) {
+        settingShiftBankNpc = enabled;
+        SETTINGS_PREFS.putBoolean("shiftBankNpc", enabled);
+    }
+
+    private void setShiftUseQuicklyBankBooth(boolean enabled) {
+        settingShiftUseQuicklyBankBooth = enabled;
+        SETTINGS_PREFS.putBoolean("shiftUseQuicklyBankBooth", enabled);
+    }
+
+    private void setShiftExamineAnything(boolean enabled) {
+        settingShiftExamineAnything = enabled;
+        SETTINGS_PREFS.putBoolean("shiftExamineAnything", enabled);
+    }
+
+    private void setDiscordRichPresence(boolean enabled) {
+        settingDiscordRichPresence = enabled;
+        SETTINGS_PREFS.putBoolean("discordRichPresence", enabled);
+        if (enabled) {
+            DISCORD_RPC.connect();
+            DISCORD_RPC.updateActivity("Playing 2004 Singleplayer Progressive", "Loading world...");
+        } else {
+            DISCORD_RPC.disconnect();
+        }
+    }
+
+    public static void updateDiscordActivity(String details, String state) {
+        if (settingDiscordRichPresence) {
+            DISCORD_RPC.updateActivity(details, state);
         }
     }
 
@@ -3232,11 +3708,21 @@ public final class GLRenderer implements TriangleRenderer {
 
     private void scrollLostHqHorizontal(int amountScreenPx) {
         double readerScale = lostHqReaderScale();
-        int pageW = Math.max(1, sidebarPanelW() - 8);
-        int visibleW = Math.max(1, (int) Math.ceil(pageW / readerScale));
-        int maxScroll = Math.max(0, LOSTHQ_READER_WIDE - visibleW);
+        int maxScroll = lostHqMaxScrollX();
         int readerAmt = (int) Math.round(amountScreenPx / readerScale);
         lostHqScrollX = Math.max(0, Math.min(maxScroll, lostHqScrollX + readerAmt));
+    }
+
+    private int lostHqMaxScrollX() {
+        double readerScale = lostHqReaderScale();
+        int pageW = Math.max(1, sidebarPanelW() - 8);
+        int visibleW = Math.max(1, (int) Math.ceil(pageW / readerScale));
+        return Math.max(0, Math.max(LOSTHQ_READER_W, lostHqContentW) - visibleW);
+    }
+
+    private static int lostHqMeasuredContentW(int measuredW) {
+        int w = Math.max(LOSTHQ_READER_W, Math.min(measuredW, LOSTHQ_READER_WIDE));
+        return w;
     }
 
     private void clickLostHqPage(int x, int y) {
@@ -3246,7 +3732,7 @@ public final class GLRenderer implements TriangleRenderer {
         double readerScale = lostHqReaderScale();
         int relX = (int) ((x - sidebarPanelX() - 4) / readerScale) + lostHqScrollX;
         int relY = (int) ((y - 70) / readerScale) + lostHqScrollY;
-        if (relX < 0 || relX >= LOSTHQ_READER_WIDE || relY < 0) return;
+        if (relX < 0 || relX >= Math.max(LOSTHQ_READER_W, lostHqContentW) || relY < 0) return;
         try {
             int pos;
             synchronized (page.getTreeLock()) {
@@ -3254,6 +3740,27 @@ public final class GLRenderer implements TriangleRenderer {
             }
             HTMLDocument doc = (HTMLDocument) page.getDocument();
             Element element = doc.getCharacterElement(pos);
+            // First check for IMG element at click position — walk up the tree.
+            // Swing represents <img> as a leaf whose name attribute is HTML.Tag.IMG.
+            for (Element walk = element; walk != null; walk = walk.getParentElement()) {
+                AttributeSet attrs = walk.getAttributes();
+                Object name = attrs.getAttribute(StyleConstants.NameAttribute);
+                if (name != HTML.Tag.IMG) continue;
+                Object src = attrs.getAttribute(HTML.Attribute.SRC);
+                if (src == null) break;
+                String srcStr = src.toString();
+                if (srcStr.contains("questimages/quest_complete_thumb/")
+                        || srcStr.contains("questimages/quest_complete/")) {
+                    // Only zoom while in-game — there's no 3D viewport to overlay onto
+                    // at the title/login screen, so the click would do nothing useful.
+                    if (shell instanceof Client && ((Client) shell).ingame) {
+                        // Always load the high-res original for the zoom view.
+                        openLostHqZoom(srcStr.replace("quest_complete_thumb/", "quest_complete/"));
+                    }
+                    return;
+                }
+                break;
+            }
             AttributeSet anchor = (AttributeSet) element.getAttributes().getAttribute(HTML.Tag.A);
             if (anchor == null) return;
             Object href = anchor.getAttribute(HTML.Attribute.HREF);
@@ -3265,6 +3772,71 @@ public final class GLRenderer implements TriangleRenderer {
                 openLostHqPage(pageUri.resolve(target));
             }
         } catch (Exception ignored) {
+        }
+    }
+
+    private void openLostHqZoom(String src) {
+        // src may be absolute (https://...) or relative (img/...).  Strip everything
+        // up to and including "img/" so we can resolve against the classpath base.
+        int idx = src.indexOf("img/");
+        if (idx < 0) return;
+        String resource = "/losthq/" + src.substring(idx);
+        try (InputStream in = GLRenderer.class.getResourceAsStream(resource)) {
+            if (in == null) return;
+            BufferedImage img = ImageIO.read(in);
+            if (img != null) lostHqZoomImage = img;
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void drawLostHqZoomOverlay() {
+        BufferedImage img = lostHqZoomImage;
+        if (img == null || PixMap.uiBuffer == null) return;
+        // Draw inside the 3D game viewport only, leaving chatbox / inventory / sidebar alone.
+        int x0 = vpDrawX;
+        int y0 = vpDrawY;
+        int w  = vpW;
+        int h  = vpH;
+        if (w <= 0 || h <= 0) return;
+        // Wrap the uiBuffer slice as a BufferedImage so we can draw with Graphics2D
+        // (it's TYPE_INT_ARGB = BGRA on little-endian, which matches how GL uploads it).
+        java.awt.image.DataBufferInt buf = new java.awt.image.DataBufferInt(
+                PixMap.uiBuffer, PixMap.uiBuffer.length);
+        java.awt.image.SinglePixelPackedSampleModel sm =
+                new java.awt.image.SinglePixelPackedSampleModel(
+                        java.awt.image.DataBuffer.TYPE_INT, maxUiW, screenH,
+                        new int[]{0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000});
+        java.awt.image.WritableRaster raster =
+                java.awt.image.Raster.createWritableRaster(sm, buf, null);
+        BufferedImage canvas = new BufferedImage(
+                java.awt.image.ColorModel.getRGBdefault(), raster, false, null);
+        java.awt.Graphics2D g = canvas.createGraphics();
+        try {
+            g.setClip(x0, y0, w, h);
+            // Semi-transparent dark backdrop over the game viewport.
+            g.setComposite(java.awt.AlphaComposite.Src);
+            g.setColor(new java.awt.Color(0, 0, 0, 200));
+            g.fillRect(x0, y0, w, h);
+            // Fit image inside the viewport with a small margin, preserve aspect ratio.
+            int maxW = (int) (w * 0.92);
+            int maxH = (int) (h * 0.92);
+            double scale = Math.min((double) maxW / img.getWidth(),
+                                    (double) maxH / img.getHeight());
+            int drawW = (int) (img.getWidth() * scale);
+            int drawH = (int) (img.getHeight() * scale);
+            int drawX = x0 + (w - drawW) / 2;
+            int drawY = y0 + (h - drawH) / 2;
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                    java.awt.RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.setRenderingHint(java.awt.RenderingHints.KEY_RENDERING,
+                    java.awt.RenderingHints.VALUE_RENDER_QUALITY);
+            g.drawImage(img, drawX, drawY, drawW, drawH, null);
+            // Hint text just above the image.
+            g.setColor(new java.awt.Color(0xE8, 0x9E, 0x14));
+            g.setFont(new java.awt.Font("SansSerif", java.awt.Font.BOLD, 11));
+            g.drawString("CLICK TO CLOSE", drawX, Math.max(y0 + 12, drawY - 6));
+        } finally {
+            g.dispose();
         }
     }
 
@@ -3291,6 +3863,7 @@ public final class GLRenderer implements TriangleRenderer {
                 worldMapFullscreen = false;
                 sidebarOpen = false;
                 mapDragging = false;
+                updateWindowSizeLimits();
                 resizeForSidebar();
                 updateOutputViewport();
             }
@@ -3334,6 +3907,7 @@ public final class GLRenderer implements TriangleRenderer {
     private void toggleFullscreen() {
         settingsFullscreen = !settingsFullscreen;
         if (settingsFullscreen) {
+            updateWindowSizeLimits();
             long monitor = glfwGetPrimaryMonitor();
             org.lwjgl.glfw.GLFWVidMode mode = glfwGetVideoMode(monitor);
             if (mode != null) {
@@ -3342,6 +3916,7 @@ public final class GLRenderer implements TriangleRenderer {
             }
         } else {
             glfwSetWindowMonitor(window, NULL, 100, 100, outputW(), screenH, GLFW_DONT_CARE);
+            updateWindowSizeLimits();
         }
         updateOutputViewport();
     }

@@ -226,6 +226,15 @@ public class NpcType {
 
 	@ObfuscatedName("gc.a(II[II)Lfb;")
 	public Model getTempModel(int arg1, int[] arg2, int arg3) {
+		return this.getTempModel(arg1, arg2, arg3, -1, 0);
+	}
+
+	/**
+	 * As {@link #getTempModel(int, int[], int)} but, for the single-sequence
+	 * (non-masked) case, lag-blends FROM keyframe {@code frameFrom} TO the current
+	 * keyframe {@code arg1} by {@code t256}/256 for 60fps smooth animation.
+	 */
+	public Model getTempModel(int arg1, int[] arg2, int arg3, int frameFrom, int t256) {
 		Model var5 = (Model) modelCache.get(this.id);
 		if (var5 == null) {
 			boolean var6 = false;
@@ -260,7 +269,11 @@ public class NpcType {
 		if (arg1 != -1 && arg3 != -1) {
 			var11.maskAnimate(arg2, arg1, arg3);
 		} else if (arg1 != -1) {
-			var11.animate(arg1);
+			if (frameFrom != -1) {
+				var11.animateInterpolated(frameFrom, arg1, t256);
+			} else {
+				var11.animate(arg1);
+			}
 		}
 		if (this.resizeh != 128 || this.resizev != 128) {
 			var11.resize(this.resizeh, this.resizeh, this.resizev);
