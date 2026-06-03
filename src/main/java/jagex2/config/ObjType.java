@@ -407,6 +407,11 @@ public class ObjType {
 				var5.recolour(this.recol_s[var6], this.recol_d[var6]);
 			}
 		}
+		// Ground items must render solid. The GL renderer has the depth buffer off
+		// and blending always on, so any face alpha carried by the item model shows
+		// as see-through (e.g. logs you can look through). Dropped items are never
+		// translucent, so drop the per-face alpha for the ground model.
+		var5.faceAlpha = null;
 		var5.calculateNormals(this.ambient + 64, this.contrast + 768, -50, -10, -50, true);
 		var5.useAABBMouseCheck = true;
 		modelCache.put(var5, (long) this.id);

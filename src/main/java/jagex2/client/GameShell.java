@@ -25,6 +25,14 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 	@ObfuscatedName("a.k")
 	public int fps;
 
+	/**
+	 * Fraction (0..1) of the way through the current fixed logic tick at the
+	 * moment {@link #draw()} runs. Only meaningful when {@link #isHighFpsEnabled()}
+	 * is true; the render path uses it to interpolate animations between the
+	 * 50fps logic updates so motion looks smooth at the monitor's refresh rate.
+	 */
+	public volatile float subTickFraction = 0f;
+
 	@ObfuscatedName("a.l")
 	public boolean debug = false;
 
@@ -145,6 +153,12 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 			this.otim[var6] = System.currentTimeMillis();
 		}
 		long var7 = System.currentTimeMillis();
+		// High-FPS (interpolated render) bookkeeping. In this mode the game logic
+		// still ticks on the fixed server-compatible schedule, but draw() runs
+		// every monitor refresh and animations are interpolated between ticks.
+		long highFpsLast = System.currentTimeMillis();
+		long logicAccumMs = 0L;
+		boolean wasHighFps = this.isHighFpsEnabled();
 		while (true) {
 			long var11;
 			do {
@@ -161,59 +175,127 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 						return;
 					}
 				}
-				int var9 = var2;
-				int var10 = var3;
-				var2 = 300;
-				var3 = 1;
-				var11 = System.currentTimeMillis();
-				if (this.otim[var1] == 0L) {
-					var2 = var9;
-					var3 = var10;
-				} else if (var11 > this.otim[var1]) {
-					var2 = (int) ((long) (this.deltime * 2560) / (var11 - this.otim[var1]));
+				boolean highFpsEnabled = this.isHighFpsEnabled();
+				if (highFpsEnabled != wasHighFps) {
+					long now = System.currentTimeMillis();
+					highFpsLast = now;
+					logicAccumMs = 0L;
+					this.subTickFraction = 0f;
+					if (!highFpsEnabled) {
+						for (int i = 0; i < 10; i++) {
+							this.otim[i] = now;
+						}
+						var1 = 0;
+						var2 = 256;
+						var3 = 1;
+						var4 = 0;
+					}
+					wasHighFps = highFpsEnabled;
 				}
-				if (var2 < 25) {
-					var2 = 25;
-				}
-				if (var2 > 256) {
-					var2 = 256;
-					var3 = (int) ((long) this.deltime - (var11 - this.otim[var1]) / 10L);
-				}
-				if (var3 > this.deltime) {
-					var3 = this.deltime;
-				}
-				this.otim[var1] = var11;
-				var1 = (var1 + 1) % 10;
-				if (var3 > 1) {
-					for (int var13 = 0; var13 < 10; var13++) {
-						if (this.otim[var13] != 0L) {
-							this.otim[var13] += var3;
+				if (highFpsEnabled) {
+					// ---- decoupled path: fixed-timestep logic + interpolated draw ----
+					var11 = System.currentTimeMillis();
+					long elapsed = var11 - highFpsLast;
+					highFpsLast = var11;
+					if (elapsed < 0L) {
+						elapsed = 0L;
+					}
+					if (elapsed > 200L) {
+						elapsed = 200L; // clamp so a long stall can't spiral the catch-up loop
+					}
+					logicAccumMs += elapsed;
+					int logicMs = this.deltime > 0 ? this.deltime : 20;
+					int guard = 0;
+					while (logicAccumMs >= logicMs && guard < 10) {
+						this.mouseClickButton = this.nextMouseClickButton;
+						this.mouseClickX = this.nextMouseClickX;
+						this.mouseClickY = this.nextMouseClickY;
+						this.mouseClickTime = this.nextMouseClickTime;
+						this.nextMouseClickButton = 0;
+						this.loop();
+						this.keyQueueReadPos = this.keyQueueWritePos;
+						logicAccumMs -= logicMs;
+						guard++;
+					}
+					if (logicAccumMs > logicMs) {
+						logicAccumMs = logicMs; // hit the guard; keep the fraction in [0,1]
+					}
+					this.subTickFraction = (float) logicAccumMs / (float) logicMs;
+					this.draw();
+					// glfwSwapInterval(1) makes draw() block on vsync, which paces the
+					// render to the refresh rate. Add a tiny floor in case vsync is off
+					// so we don't busy-spin a core at 100%.
+					long frameMs = System.currentTimeMillis() - var11;
+					if (frameMs < 2L) {
+						try {
+							Thread.sleep(1L);
+						} catch (InterruptedException ignored) {
+						}
+						frameMs = System.currentTimeMillis() - var11;
+					}
+					// Report the actual render rate (≈ refresh rate), not the logic rate.
+					this.fps = frameMs > 0L ? (int) (1000L / frameMs) : 1000;
+				} else {
+					// ---- legacy path: 1:1 logic/draw, unchanged ----
+					this.subTickFraction = 0f;
+					int var9 = var2;
+					int var10 = var3;
+					var2 = 300;
+					var3 = 1;
+					var11 = System.currentTimeMillis();
+					if (this.otim[var1] == 0L) {
+						var2 = var9;
+						var3 = var10;
+					} else if (var11 > this.otim[var1]) {
+						var2 = (int) ((long) (this.deltime * 2560) / (var11 - this.otim[var1]));
+					}
+					if (var2 < 25) {
+						var2 = 25;
+					}
+					if (var2 > 256) {
+						var2 = 256;
+						var3 = (int) ((long) this.deltime - (var11 - this.otim[var1]) / 10L);
+					}
+					if (var3 > this.deltime) {
+						var3 = this.deltime;
+					}
+					this.otim[var1] = var11;
+					var1 = (var1 + 1) % 10;
+					if (var3 > 1) {
+						for (int var13 = 0; var13 < 10; var13++) {
+							if (this.otim[var13] != 0L) {
+								this.otim[var13] += var3;
+							}
 						}
 					}
+					if (var3 < this.mindel) {
+						var3 = this.mindel;
+					}
+					try {
+						Thread.sleep((long) var3);
+					} catch (InterruptedException var16) {
+						var5++;
+					}
+					while (var4 < 256) {
+						this.mouseClickButton = this.nextMouseClickButton;
+						this.mouseClickX = this.nextMouseClickX;
+						this.mouseClickY = this.nextMouseClickY;
+						this.mouseClickTime = this.nextMouseClickTime;
+						this.nextMouseClickButton = 0;
+						this.loop();
+						this.keyQueueReadPos = this.keyQueueWritePos;
+						var4 += var2;
+					}
+					var4 &= 0xFF;
+					if (this.deltime > 0) {
+						this.fps = var2 * 1000 / (this.deltime * 256);
+					}
+					this.draw();
+					// Keep the high-fps clock fresh so flipping the toggle on mid-session
+					// doesn't replay a huge accumulated delta as a burst of logic ticks.
+					highFpsLast = System.currentTimeMillis();
+					logicAccumMs = 0L;
 				}
-				if (var3 < this.mindel) {
-					var3 = this.mindel;
-				}
-				try {
-					Thread.sleep((long) var3);
-				} catch (InterruptedException var16) {
-					var5++;
-				}
-				while (var4 < 256) {
-					this.mouseClickButton = this.nextMouseClickButton;
-					this.mouseClickX = this.nextMouseClickX;
-					this.mouseClickY = this.nextMouseClickY;
-					this.mouseClickTime = this.nextMouseClickTime;
-					this.nextMouseClickButton = 0;
-					this.loop();
-					this.keyQueueReadPos = this.keyQueueWritePos;
-					var4 += var2;
-				}
-				var4 &= 0xFF;
-				if (this.deltime > 0) {
-					this.fps = var2 * 1000 / (this.deltime * 256);
-				}
-				this.draw();
 			} while (!this.debug);
 			System.out.println("ntime:" + var11);
 			for (int var14 = 0; var14 < 10; var14++) {
@@ -252,6 +334,15 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 	@ObfuscatedName("a.a(II)V")
 	public void setFramerate(int arg1) {
 		this.deltime = 1000 / arg1;
+	}
+
+	/**
+	 * When true, {@link #run()} renders on a loop decoupled from the fixed logic
+	 * tick (one draw per refresh, interpolated). Subclasses override this to wire
+	 * it to the user's "60 FPS" setting; the base shell keeps the legacy behaviour.
+	 */
+	protected boolean isHighFpsEnabled() {
+		return false;
 	}
 
 	public void start() {

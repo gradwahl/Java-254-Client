@@ -174,23 +174,38 @@ public class signlink implements Runnable {
 	}
 
 	public static String findcachedir() {
-		String[] var0 = new String[] { "c:/windows/", "c:/winnt/", "d:/windows/", "d:/winnt/", "e:/windows/", "e:/winnt/", "f:/windows/", "f:/winnt/", "c:/", "~/", "/tmp/", "" };
 		if (storeid < 32 || storeid > 34) {
 			storeid = 32;
 		}
-		String var1 = ".file_store_" + storeid;
+		String var1 = "file_store_" + storeid;
+		String override = System.getProperty("rs254.cache.dir");
+		String userDir = System.getProperty("user.dir", ".");
+		String userHome = System.getProperty("user.home", ".");
+		String tmpDir = System.getProperty("java.io.tmpdir", ".");
+		String[] var0 = new String[] {
+				override,
+				userDir + File.separator + "cache",
+				userHome + File.separator + ".progressive-java-client" + File.separator + var1,
+				tmpDir + File.separator + ".progressive-java-client" + File.separator + var1,
+				"c:/windows/.file_store_" + storeid,
+				"c:/winnt/.file_store_" + storeid,
+				"d:/windows/.file_store_" + storeid,
+				"d:/winnt/.file_store_" + storeid,
+				"e:/windows/.file_store_" + storeid,
+				"e:/winnt/.file_store_" + storeid,
+				"f:/windows/.file_store_" + storeid,
+				"f:/winnt/.file_store_" + storeid,
+				"c:/.file_store_" + storeid
+		};
 		for (int var2 = 0; var2 < var0.length; var2++) {
 			try {
 				String var3 = var0[var2];
-				if (var3.length() > 0) {
-					File var4 = new File(var3);
-					if (!var4.exists()) {
-						continue;
-					}
+				if (var3 == null || var3.length() == 0) {
+					continue;
 				}
-				File var5 = new File(var3 + var1);
-				if (var5.exists() || var5.mkdir()) {
-					return var3 + var1 + "/";
+				File var4 = new File(var3);
+				if ((var4.exists() || var4.mkdirs()) && var4.isDirectory() && canWriteCacheDir(var4)) {
+					return var4.getPath() + File.separator;
 				}
 			} catch (Exception var6) {
 			}
@@ -198,7 +213,36 @@ public class signlink implements Runnable {
 		return null;
 	}
 
+	private static boolean canWriteCacheDir(File arg0) {
+		File var1 = new File(arg0, ".write_test");
+		try {
+			FileOutputStream var2 = new FileOutputStream(var1);
+			var2.write(0);
+			var2.close();
+			var1.delete();
+			File var3 = new File(arg0, "main_file_cache.dat");
+			if (var3.exists()) {
+				RandomAccessFile var4 = new RandomAccessFile(var3, "rw");
+				var4.close();
+			}
+			for (int var5 = 0; var5 < 5; var5++) {
+				File var6 = new File(arg0, "main_file_cache.idx" + var5);
+				if (var6.exists()) {
+					RandomAccessFile var7 = new RandomAccessFile(var6, "rw");
+					var7.close();
+				}
+			}
+			return true;
+		} catch (Exception var8) {
+			var1.delete();
+			return false;
+		}
+	}
+
 	public static int getuid(String arg0) {
+		if (arg0 == null) {
+			return 0;
+		}
 		try {
 			File var1 = new File(arg0 + "uid.dat");
 			if (!var1.exists() || var1.length() < 4L) {

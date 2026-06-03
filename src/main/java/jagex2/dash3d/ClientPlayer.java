@@ -229,12 +229,20 @@ public class ClientPlayer extends ClientEntity {
 	public Model getTempModel2() {
 		if (this.transmog != null) {
 			int var2 = -1;
+			int transmogFrom = -1;
+			int transmogT = 0;
 			if (super.primarySeqId >= 0 && super.primarySeqDelay == 0) {
-				var2 = SeqType.list[super.primarySeqId].frames[super.primarySeqFrame];
+				SeqType var3 = SeqType.list[super.primarySeqId];
+				var2 = var3.frames[super.primarySeqFrame];
+				transmogT = this.seqInterpWeight(var3, super.primarySeqFrame, super.primarySeqCycle, false);
+				transmogFrom = this.interpFromFrame;
 			} else if (super.secondarySeqId >= 0) {
-				var2 = SeqType.list[super.secondarySeqId].frames[super.secondarySeqFrame];
+				SeqType var4 = SeqType.list[super.secondarySeqId];
+				var2 = var4.frames[super.secondarySeqFrame];
+				transmogT = this.seqInterpWeight(var4, super.secondarySeqFrame, super.secondarySeqCycle, true);
+				transmogFrom = this.interpFromFrame;
 			}
-			return this.transmog.getTempModel(var2, null, -1);
+			return this.transmog.getTempModel(var2, null, -1, transmogFrom, transmogT);
 		}
 
 		long var4 = this.baseId;
@@ -242,9 +250,15 @@ public class ClientPlayer extends ClientEntity {
 		int var7 = -1;
 		int var8 = -1;
 		int var9 = -1;
+		// Lag-interpolation source frame + weight for the single-sequence (non-masked)
+		// case; computed alongside var6 so the apply below can blend keyframes.
+		int interpFrom = -1;
+		int interpT = 0;
 		if (super.primarySeqId >= 0 && super.primarySeqDelay == 0) {
 			SeqType var10 = SeqType.list[super.primarySeqId];
 			var6 = var10.frames[super.primarySeqFrame];
+			interpT = this.seqInterpWeight(var10, super.primarySeqFrame, super.primarySeqCycle, false);
+			interpFrom = this.interpFromFrame;
 			if (super.secondarySeqId >= 0 && super.secondarySeqId != super.readyanim) {
 				var7 = SeqType.list[super.secondarySeqId].frames[super.secondarySeqFrame];
 			}
@@ -257,7 +271,10 @@ public class ClientPlayer extends ClientEntity {
 				var4 += var9 - this.appearance[3] << 16;
 			}
 		} else if (super.secondarySeqId >= 0) {
-			var6 = SeqType.list[super.secondarySeqId].frames[super.secondarySeqFrame];
+			SeqType secSeq = SeqType.list[super.secondarySeqId];
+			var6 = secSeq.frames[super.secondarySeqFrame];
+			interpT = this.seqInterpWeight(secSeq, super.secondarySeqFrame, super.secondarySeqCycle, true);
+			interpFrom = this.interpFromFrame;
 		}
 		Model var11 = (Model) modelCache.get(var4);
 		if (var11 == null) {
@@ -332,7 +349,11 @@ public class ClientPlayer extends ClientEntity {
 		if (var6 != -1 && var7 != -1) {
 			var22.maskAnimate(SeqType.list[super.primarySeqId].walkmerge, var6, var7);
 		} else if (var6 != -1) {
-			var22.animate(var6);
+			if (interpFrom != -1) {
+				var22.animateInterpolated(interpFrom, var6, interpT);
+			} else {
+				var22.animate(var6);
+			}
 		}
 		var22.calcBoundingCylinder();
 		var22.labelFaces = null;

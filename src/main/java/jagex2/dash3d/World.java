@@ -197,6 +197,8 @@ public class World {
 	@ObfuscatedName("s.M")
 	public static boolean click;
 
+	private GroundObject deferredGroundObject;
+
 	public World(int arg0, int arg1, int[][][] arg2, int arg4) {
 		this.maxLevel = arg4;
 		this.maxTileX = arg0;
@@ -1350,22 +1352,21 @@ public class World {
 													}
 												}
 											}
+											this.deferredGroundObject = null;
 											if (var18) {
 												GroundDecor var33 = var3.groundDecor;
 												if (var33 != null) {
-													var33.model.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var33.x - cx, var33.y - cy, var33.z - cz, var33.typecode);
+													boolean forceOpaque = Model.forceOpaqueFaceAlpha;
+													Model.forceOpaqueFaceAlpha = true;
+													try {
+														var33.model.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var33.x - cx, var33.y - cy, var33.z - cz, var33.typecode);
+													} finally {
+														Model.forceOpaqueFaceAlpha = forceOpaque;
+													}
 												}
 												GroundObject var34 = var3.groundObject;
 												if (var34 != null && var34.height == 0) {
-													if (var34.bottom != null) {
-														var34.bottom.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var34.x - cx, var34.y - cy, var34.z - cz, var34.typecode);
-													}
-													if (var34.middle != null) {
-														var34.middle.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var34.x - cx, var34.y - cy, var34.z - cz, var34.typecode);
-													}
-													if (var34.top != null) {
-														var34.top.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var34.x - cx, var34.y - cy, var34.z - cz, var34.typecode);
-													}
+													this.deferredGroundObject = var34;
 												}
 											}
 											int var35 = var3.combinedPrimaryExtendDirections;
@@ -1414,6 +1415,10 @@ public class World {
 											}
 										}
 										if (!var3.drawPrimaries) {
+											if (this.deferredGroundObject != null) {
+												this.renderGroundObject(this.deferredGroundObject, 0);
+												this.deferredGroundObject = null;
+											}
 											break;
 										}
 										int var43 = var3.primaryCount;
@@ -1505,6 +1510,10 @@ public class World {
 											}
 										}
 										if (!var3.drawPrimaries) {
+											if (this.deferredGroundObject != null) {
+												this.renderGroundObject(this.deferredGroundObject, 0);
+												this.deferredGroundObject = null;
+											}
 											break;
 										}
 									}
@@ -1534,15 +1543,7 @@ public class World {
 			fillLeft--;
 			GroundObject var71 = var3.groundObject;
 			if (var71 != null && var71.height != 0) {
-				if (var71.bottom != null) {
-					var71.bottom.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var71.x - cx, var71.y - cy - var71.height, var71.z - cz, var71.typecode);
-				}
-				if (var71.middle != null) {
-					var71.middle.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var71.x - cx, var71.y - cy - var71.height, var71.z - cz, var71.typecode);
-				}
-				if (var71.top != null) {
-					var71.top.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, var71.x - cx, var71.y - cy - var71.height, var71.z - cz, var71.typecode);
-				}
+				this.renderGroundObject(var71, var71.height);
 			}
 			if (var3.backWallTypes != 0) {
 				Decor var72 = var3.decor;
@@ -1618,6 +1619,24 @@ public class World {
 					fillQueue.push(var88);
 				}
 			}
+		}
+	}
+
+	private void renderGroundObject(GroundObject obj, int yOffset) {
+		boolean forceOpaque = Model.forceOpaqueFaceAlpha;
+		Model.forceOpaqueFaceAlpha = true;
+		try {
+			if (obj.bottom != null) {
+				obj.bottom.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, obj.x - cx, obj.y - cy - yOffset, obj.z - cz, obj.typecode);
+			}
+			if (obj.middle != null) {
+				obj.middle.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, obj.x - cx, obj.y - cy - yOffset, obj.z - cz, obj.typecode);
+			}
+			if (obj.top != null) {
+				obj.top.worldRender(0, cameraSinX, cameraCosX, cameraSinY, cameraCosY, obj.x - cx, obj.y - cy - yOffset, obj.z - cz, obj.typecode);
+			}
+		} finally {
+			Model.forceOpaqueFaceAlpha = forceOpaque;
 		}
 	}
 

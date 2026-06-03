@@ -27,6 +27,16 @@ public class Model extends ModelSource {
 	@ObfuscatedName("fb.v")
 	public static int[] tmpFaceAlpha = new int[2000];
 
+	// Scratch buffers for vertex-level animation interpolation (60fps mode).
+	private static int[] interpBaseX = new int[2000];
+	private static int[] interpBaseY = new int[2000];
+	private static int[] interpBaseZ = new int[2000];
+	private static int[] interpPoseX = new int[2000];
+	private static int[] interpPoseY = new int[2000];
+	private static int[] interpPoseZ = new int[2000];
+	private static int[] interpBaseAlpha = new int[2000];
+	public static boolean forceOpaqueFaceAlpha;
+
 	@ObfuscatedName("fb.w")
 	public int vertexCount;
 
@@ -1078,6 +1088,82 @@ public class Model extends ModelSource {
 		}
 	}
 
+	/**
+	 * Blends between two keyframes of the same animation by {@code t256}/256
+	 * (0 = frame A, 256 = frame B) to render smooth in-between poses for 60fps
+	 * mode. Works at the vertex level: it builds each keyframe's full pose from
+	 * the current rest vertices and linearly interpolates the results. Doing it
+	 * post-skinning avoids the stateful per-frame pivot/origin transforms, which
+	 * cannot be safely merged across two frames. Falls back to a plain
+	 * single-frame apply when the inputs can't be interpolated.
+	 *
+	 * <p>Must be called while the model holds its un-animated rest pose (i.e.
+	 * straight after {@code set(...)}), exactly like {@link #animate(int)}.
+	 */
+	public void animateInterpolated(int frameIdA, int frameIdB, int t256) {
+		if (this.labelVertices == null || frameIdA == -1) {
+			return;
+		}
+		if (t256 <= 0 || frameIdB == -1) {
+			this.animate(frameIdA);
+			return;
+		}
+		if (t256 >= 256) {
+			this.animate(frameIdB);
+			return;
+		}
+		AnimFrame var5 = AnimFrame.get(frameIdA);
+		AnimFrame var6 = AnimFrame.get(frameIdB);
+		if (var5 == null) {
+			return;
+		}
+		if (var6 == null || var6.base != var5.base) {
+			this.animate(frameIdA);
+			return;
+		}
+		int var7 = this.vertexCount;
+		if (interpBaseX.length < var7) {
+			interpBaseX = new int[var7 + 100];
+			interpBaseY = new int[var7 + 100];
+			interpBaseZ = new int[var7 + 100];
+			interpPoseX = new int[var7 + 100];
+			interpPoseY = new int[var7 + 100];
+			interpPoseZ = new int[var7 + 100];
+		}
+		// Snapshot the rest pose so frame B can be built from the same base.
+		System.arraycopy(this.vertexX, 0, interpBaseX, 0, var7);
+		System.arraycopy(this.vertexY, 0, interpBaseY, 0, var7);
+		System.arraycopy(this.vertexZ, 0, interpBaseZ, 0, var7);
+		// animate() also folds type-5 alpha transforms into faceAlpha; snapshot it
+		// too so building both poses doesn't apply those changes twice.
+		boolean var9 = this.faceAlpha != null;
+		if (var9) {
+			if (interpBaseAlpha.length < this.faceCount) {
+				interpBaseAlpha = new int[this.faceCount + 100];
+			}
+			System.arraycopy(this.faceAlpha, 0, interpBaseAlpha, 0, this.faceCount);
+		}
+		// Pose A.
+		this.animate(frameIdA);
+		System.arraycopy(this.vertexX, 0, interpPoseX, 0, var7);
+		System.arraycopy(this.vertexY, 0, interpPoseY, 0, var7);
+		System.arraycopy(this.vertexZ, 0, interpPoseZ, 0, var7);
+		// Restore the rest pose (and alpha), then build pose B in place.
+		System.arraycopy(interpBaseX, 0, this.vertexX, 0, var7);
+		System.arraycopy(interpBaseY, 0, this.vertexY, 0, var7);
+		System.arraycopy(interpBaseZ, 0, this.vertexZ, 0, var7);
+		if (var9) {
+			System.arraycopy(interpBaseAlpha, 0, this.faceAlpha, 0, this.faceCount);
+		}
+		this.animate(frameIdB);
+		// vertex = poseA + (poseB - poseA) * t.
+		for (int var8 = 0; var8 < var7; var8++) {
+			this.vertexX[var8] = interpPoseX[var8] + (this.vertexX[var8] - interpPoseX[var8]) * t256 / 256;
+			this.vertexY[var8] = interpPoseY[var8] + (this.vertexY[var8] - interpPoseY[var8]) * t256 / 256;
+			this.vertexZ[var8] = interpPoseZ[var8] + (this.vertexZ[var8] - interpPoseZ[var8]) * t256 / 256;
+		}
+	}
+
 	@ObfuscatedName("fb.a([IIII)V")
 	public void maskAnimate(int[] arg0, int arg2, int arg3) {
 		if (arg2 == -1) {
@@ -1783,6 +1869,11 @@ public class Model extends ModelSource {
 
 	@ObfuscatedName("fb.f(I)V")
 	public void render3(int arg0) {
+		if (this.faceAlpha == null || forceOpaqueFaceAlpha) {
+			Pix3D.trans = 0;
+		} else {
+			Pix3D.trans = this.faceAlpha[arg0];
+		}
 		if (faceNearClipped[arg0]) {
 			this.render3ZClip(arg0);
 			return;
@@ -1794,11 +1885,6 @@ public class Model extends ModelSource {
 		Pix3D.triZ1 = vertexScreenZ[var3] + this.minDepth;
 		Pix3D.triZ2 = vertexScreenZ[var4] + this.minDepth;
 		Pix3D.hclip = faceClippedX[arg0];
-		if (this.faceAlpha == null) {
-			Pix3D.trans = 0;
-		} else {
-			Pix3D.trans = this.faceAlpha[arg0];
-		}
 		int var5;
 		if (this.faceInfo == null) {
 			var5 = 0;
