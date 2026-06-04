@@ -58,7 +58,7 @@ if [ "$MISSING" -eq 1 ]; then
     REBUILD=1
 fi
 
-if [ ! -f target/Progressive-Java-Client.jar ] || [ "$REBUILD" -eq 1 ]; then
+if [ ! -f target/Progressive-Java-Client.jar ] || [ ! -f target/Progressive-Java-Updater.jar ] || [ "$REBUILD" -eq 1 ]; then
     bash build.sh
 fi
 

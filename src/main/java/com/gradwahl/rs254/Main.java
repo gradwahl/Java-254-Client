@@ -17,6 +17,7 @@ public final class Main {
         setupErrorLogging();
         applyEarlyGraphicsProperties();
         relaunchJarWithOneGbHeapIfNeeded(args);
+        com.gradwahl.rs254.update.ClientUpdater.ensureUpdaterExtracted();
         ClientDebugger.enable();
 
         ClientConfig config = ClientConfig.load();

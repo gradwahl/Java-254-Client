@@ -44,8 +44,8 @@ import javax.swing.text.html.HTML;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 
+import com.gradwahl.rs254.ClientConfig;
 import com.gradwahl.rs254.discord.DiscordRichPresence;
-import com.gradwahl.rs254.update.ClientUpdater;
 
 import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
 import static org.lwjgl.glfw.GLFW.*;
@@ -507,16 +507,7 @@ public final class GLRenderer implements TriangleRenderer {
     private boolean settingsFullscreen  = false;
     private boolean settingsAfkDropdownOpen;
     private int     settingsAfkIndex    = SETTINGS_PREFS.getInt("afkIndex", 0);
-    private enum UpdateButtonState { OUTDATED, CHECKING, READY, UPDATED, APPLYING }
-    private volatile UpdateButtonState updateButtonState = UpdateButtonState.OUTDATED;
-    private volatile String updateStatusText = "Current: " + ClientUpdater.currentVersionLabel();
-    private volatile ClientUpdater.UpdateInfo updateInfo;
-    private final java.util.concurrent.ExecutorService updateExecutor =
-            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
-                Thread t = new Thread(r, "client-updater");
-                t.setDaemon(true);
-                return t;
-            });
+    private final String clientVersionText = "Version: " + ClientConfig.currentVersionLabel();
 
     // XP session tracking — updated by Client when XP packets arrive
     public static final long[] xpSessionGains = new long[25];
@@ -896,7 +887,6 @@ public final class GLRenderer implements TriangleRenderer {
         if (sidebarNativeDirect != null) MemoryUtil.memFree(sidebarNativeDirect);
         hiscoresFetcher.shutdownNow();
         DISCORD_RPC.disconnect();
-        updateExecutor.shutdownNow();
         glfwFreeCallbacks(window);
         glfwDestroyWindow(window);
         glfwTerminate();
@@ -2805,7 +2795,7 @@ public final class GLRenderer implements TriangleRenderer {
         y = drawSettingsToggleRow(x, y, "60 Fps Mode", sidebarFpsEnabled);
         y = drawSettingsToggleRow(x, y, "Fullscreen Mode", settingsFullscreen);
         y += 4;
-        drawUpdateButton(x, y);
+        drawClientVersionText(x, y);
     }
 
     private void loadSettings() {
@@ -2838,36 +2828,9 @@ public final class GLRenderer implements TriangleRenderer {
         return y + 20;
     }
 
-    private void drawUpdateButton(int x, int y) {
+    private void drawClientVersionText(int x, int y) {
         int panelW = sidebarPanelW();
-        int buttonX = x + 16;
-        int buttonW = panelW - 32;
-        int color = updateButtonColor();
-        fillUiRect(buttonX, y, buttonW, 18, 0xFF202020);
-        fillUiRect(buttonX, y, buttonW, 1, color);
-        fillUiRect(buttonX, y + 17, buttonW, 1, 0xFF111111);
-        fillUiRect(buttonX, y, 1, 18, 0xFF4A4A4A);
-        fillUiRect(buttonX + buttonW - 1, y, 1, 18, 0xFF111111);
-        drawUiTextCentered(updateButtonText(), buttonX, y, buttonW, 18, 0, color);
-        drawUiTextFittedFull(updateStatusText, buttonX, y + 23, buttonW, 0, 0xFF999999);
-    }
-
-    private int updateButtonColor() {
-        return switch (updateButtonState) {
-            case READY, CHECKING, APPLYING -> 0xFF4AA3FF;
-            case UPDATED -> 0xFF43D36B;
-            case OUTDATED -> 0xFFE05252;
-        };
-    }
-
-    private String updateButtonText() {
-        return switch (updateButtonState) {
-            case CHECKING -> "CHECKING...";
-            case READY -> "READY TO UPDATE";
-            case UPDATED -> "UPDATED TO LATEST";
-            case APPLYING -> "APPLYING UPDATE...";
-            case OUTDATED -> "CHECK FOR UPDATES";
-        };
+        drawUiTextFittedFull(clientVersionText, x + 16, y + 5, panelW - 32, 0, 0xFF999999);
     }
 
     private void drawSelectBox(int x, int y, int w, String text, boolean open) {
@@ -3768,71 +3731,11 @@ public final class GLRenderer implements TriangleRenderer {
         if (toggleHit(px, rowY, x, y)) { setFps60(!sidebarFpsEnabled); return; }
         rowY += 20;
         if (toggleHit(px, rowY, x, y)) { toggleFullscreen(); return; }
-        rowY += 24;
-        if (updateButtonHit(px, rowY, x, y)) clickUpdateButton();
     }
 
     private boolean toggleHit(int px, int rowY, int mouseX, int mouseY) {
         return mouseX >= px + 8 && mouseX < px + sidebarPanelW() - 8
                 && mouseY >= rowY && mouseY < rowY + 20;
-    }
-
-    private boolean updateButtonHit(int px, int rowY, int mouseX, int mouseY) {
-        return mouseX >= px + 16 && mouseX < px + sidebarPanelW() - 16
-                && mouseY >= rowY && mouseY < rowY + 18;
-    }
-
-    private void clickUpdateButton() {
-        if (updateButtonState == UpdateButtonState.CHECKING
-                || updateButtonState == UpdateButtonState.APPLYING) {
-            return;
-        }
-        if (updateButtonState == UpdateButtonState.READY && updateInfo != null) {
-            applyUpdate();
-        } else {
-            checkForUpdates();
-        }
-    }
-
-    private void checkForUpdates() {
-        updateButtonState = UpdateButtonState.CHECKING;
-        updateStatusText = "Contacting GitHub releases...";
-        updateExecutor.execute(() -> {
-            try {
-                ClientUpdater.UpdateInfo latest = ClientUpdater.checkLatest();
-                updateInfo = latest;
-                if (latest.updateAvailable()) {
-                    updateButtonState = UpdateButtonState.READY;
-                    updateStatusText = "Latest: " + latest.tagName() + " (" + latest.assetName() + ")";
-                } else {
-                    updateButtonState = UpdateButtonState.UPDATED;
-                    updateStatusText = "Latest: " + latest.tagName();
-                }
-            } catch (Exception e) {
-                updateInfo = null;
-                updateButtonState = UpdateButtonState.OUTDATED;
-                updateStatusText = "Update check failed";
-                System.err.println("[Updater] Check failed: " + e);
-                e.printStackTrace(System.err);
-            }
-        });
-    }
-
-    private void applyUpdate() {
-        ClientUpdater.UpdateInfo info = updateInfo;
-        if (info == null) return;
-        updateButtonState = UpdateButtonState.APPLYING;
-        updateStatusText = "Downloading " + info.assetName();
-        updateExecutor.execute(() -> {
-            try {
-                ClientUpdater.apply(info);
-            } catch (Exception e) {
-                updateButtonState = UpdateButtonState.READY;
-                updateStatusText = "Update failed";
-                System.err.println("[Updater] Apply failed: " + e);
-                e.printStackTrace(System.err);
-            }
-        });
     }
 
     private void setAfkIndex(int index) {

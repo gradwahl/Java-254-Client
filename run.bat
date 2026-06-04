@@ -4,6 +4,7 @@ cd /d "%~dp0"
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 if not exist target\Progressive-Java-Client.jar call build.bat
+if not exist target\Progressive-Java-Updater.jar call build.bat
 
 if not exist "%SCRIPT_DIR%\logs" mkdir "%SCRIPT_DIR%\logs"
 

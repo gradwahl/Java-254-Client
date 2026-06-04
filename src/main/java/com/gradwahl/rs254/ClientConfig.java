@@ -3,20 +3,25 @@ package com.gradwahl.rs254;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.jar.Attributes;
+import java.util.jar.Manifest;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public record ClientConfig(String host, int httpPort, int gamePort, boolean secure, int revision, String cacheDir, String dbPath) {
+public record ClientConfig(String host, int httpPort, int gamePort, boolean secure, int revision,
+                           String cacheDir, String dbPath, String version) {
 
     private static final String CONFIG_FILE = "config.json";
 
     public static ClientConfig load() {
         File configFile = resolveConfigFile();
         boolean firstRun = !configFile.exists();
+        String version = currentVersionLabel();
 
         if (firstRun) {
             String defaultConfig =
                 "{\n" +
+                "  \"version\": \"" + escapeJson(version) + "\",\n" +
                 "  \"web_host\": \"localhost\",\n" +
                 "  \"web_port\": 80,\n" +
                 "  \"game_port\": 43594\n" +
@@ -30,9 +35,31 @@ public record ClientConfig(String host, int httpPort, int gamePort, boolean secu
             }
         } else {
             System.out.println("[Config] Loaded config from: " + configFile.getAbsolutePath());
+            updateVersionField(configFile, version);
         }
 
         return parseFile(configFile);
+    }
+
+    public static String currentVersionLabel() {
+        try {
+            String version = ClientConfig.class.getPackage().getImplementationVersion();
+            if (version != null && !version.isBlank()) {
+                return version;
+            }
+            var manifestUrl = ClientConfig.class.getResource("/META-INF/MANIFEST.MF");
+            if (manifestUrl != null) {
+                try (InputStream in = manifestUrl.openStream()) {
+                    Attributes attrs = new Manifest(in).getMainAttributes();
+                    version = attrs.getValue("Implementation-Version");
+                    if (version != null && !version.isBlank()) {
+                        return version;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "dev";
     }
 
     private static File resolveConfigFile() {
@@ -54,10 +81,12 @@ public record ClientConfig(String host, int httpPort, int gamePort, boolean secu
         int revision = 254;
         String cacheDir = "cache";
         String dbPath = "";
+        String version = currentVersionLabel();
 
         if (file.exists()) {
             try {
                 String json = Files.readString(file.toPath(), StandardCharsets.UTF_8);
+                version = readString(json, "version", version);
                 host = readString(json, "web_host", host);
                 httpPort = readInt(json, "web_port", httpPort);
                 gamePort = readInt(json, "game_port", gamePort);
@@ -76,7 +105,30 @@ public record ClientConfig(String host, int httpPort, int gamePort, boolean secu
         cacheDir = System.getProperty("rs254.cacheDir", cacheDir);
         dbPath = System.getProperty("rs254.dbPath", dbPath);
 
-        return new ClientConfig(host, httpPort, gamePort, secure, revision, cacheDir, dbPath);
+        return new ClientConfig(host, httpPort, gamePort, secure, revision, cacheDir, dbPath, version);
+    }
+
+    private static void updateVersionField(File file, String version) {
+        try {
+            String json = Files.readString(file.toPath(), StandardCharsets.UTF_8);
+            String escaped = escapeJson(version);
+            String updated;
+            if (Pattern.compile("\"version\"\\s*:").matcher(json).find()) {
+                updated = json.replaceFirst("\"version\"\\s*:\\s*\"((?:[^\\\\\"]|\\\\.)*)\"",
+                        "\"version\": \"" + Matcher.quoteReplacement(escaped) + "\"");
+            } else {
+                int objectStart = json.indexOf('{');
+                if (objectStart < 0) return;
+                updated = json.substring(0, objectStart + 1)
+                        + "\n  \"version\": \"" + escaped + "\","
+                        + json.substring(objectStart + 1);
+            }
+            if (!updated.equals(json)) {
+                Files.writeString(file.toPath(), updated, StandardCharsets.UTF_8);
+            }
+        } catch (IOException e) {
+            System.err.println("[Config] Warning: could not update version in " + file + ": " + e.getMessage());
+        }
     }
 
     private static String readString(String json, String key, String defaultValue) {
@@ -94,6 +146,10 @@ public record ClientConfig(String host, int httpPort, int gamePort, boolean secu
             try { return Integer.parseInt(m.group(1)); } catch (NumberFormatException ignored) {}
         }
         return defaultValue;
+    }
+
+    private static String escapeJson(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     /** @deprecated Use {@link #load()} instead. */

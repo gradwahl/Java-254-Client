@@ -4,6 +4,7 @@ import com.gradwahl.rs254.Main;
 
 import java.io.File;
 import java.io.InputStream;
+import java.lang.management.ManagementFactory;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -23,8 +24,32 @@ import java.util.regex.Pattern;
 public final class ClientUpdater {
     private static final String LATEST_RELEASE_API =
             "https://api.github.com/repos/2004sp/Progressive-Java-Client/releases/latest";
+    private static final String UPDATER_JAR = "Progressive-Java-Updater.jar";
+    private static final String UPDATER_RESOURCE = "/" + UPDATER_JAR;
 
     private ClientUpdater() {}
+
+    /**
+     * Drops the bundled updater jar onto disk beside the running client. The client jar ships the
+     * updater inside it as a root resource; the updater must live as its own file because
+     * {@link #apply} launches it in a separate JVM after this client exits. Safe to call on every
+     * startup: it overwrites any stale copy and no-ops when running from unpacked classes (dev) or
+     * when the resource is absent.
+     */
+    public static void ensureUpdaterExtracted() {
+        File current = currentBinary();
+        if (current == null) {
+            return;
+        }
+        Path updater = current.toPath().getParent().resolve(UPDATER_JAR);
+        try (InputStream in = ClientUpdater.class.getResourceAsStream(UPDATER_RESOURCE)) {
+            if (in == null) {
+                return;
+            }
+            Files.copy(in, updater, StandardCopyOption.REPLACE_EXISTING);
+        } catch (Exception ignored) {
+        }
+    }
 
     public record UpdateInfo(String tagName, String publishedAt, String assetName,
                              String assetUrl, boolean updateAvailable) {}
@@ -50,13 +75,27 @@ public final class ClientUpdater {
 
         Path dir = current.toPath().getParent();
         Path download = dir.resolve(current.getName() + ".download");
-        Path script = dir.resolve(isWindows() ? "apply-update.bat" : "apply-update.sh");
-        download(info.assetUrl(), download);
-        writeApplyScript(script, download, current.toPath());
+        Path updater = dir.resolve(UPDATER_JAR);
+        if (!Files.isRegularFile(updater)) {
+            ensureUpdaterExtracted();
+        }
+        if (!Files.isRegularFile(updater)) {
+            throw new IllegalStateException("Missing " + UPDATER_JAR + " beside the client. Rebuild with build.bat/build.sh.");
+        }
 
-        ProcessBuilder pb = isWindows()
-                ? new ProcessBuilder("cmd", "/c", "start", "\"\"", script.toString())
-                : new ProcessBuilder("sh", script.toString());
+        download(info.assetUrl(), download);
+
+        List<String> command = new ArrayList<>();
+        command.add(javawPath());
+        command.add("-jar");
+        command.add(updater.toString());
+        command.add(String.valueOf(ProcessHandle.current().pid()));
+        command.add(current.toPath().toString());
+        command.add(download.toString());
+        command.add("--");
+        command.addAll(restartCommand(current.toPath()));
+
+        ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(dir.toFile());
         pb.start();
         System.exit(0);
@@ -72,9 +111,14 @@ public final class ClientUpdater {
 
     private static boolean isNewerThanCurrent(String releaseTag, String publishedAt) {
         BuildInfo current = currentBuildInfo();
-        if (current.version() != null) {
-            int cmp = compareVersions(releaseTag, current.version());
-            if (cmp != 0) return cmp > 0;
+        String currentVersion = configVersion();
+        if (currentVersion == null || currentVersion.isBlank()) {
+            currentVersion = current.version();
+        }
+        // When we know the current version (from config.json or the manifest), it is authoritative:
+        // only update when the release tag is strictly newer. This stops re-downloading the same version.
+        if (currentVersion != null && !currentVersion.isBlank()) {
+            return compareVersions(releaseTag, currentVersion) > 0;
         }
         if (current.buildTime() != null) {
             try {
@@ -82,7 +126,24 @@ public final class ClientUpdater {
             } catch (Exception ignored) {
             }
         }
-        return current.version() == null;
+        return true;
+    }
+
+    /** Reads the version recorded in config.json beside the running client, or null if unavailable. */
+    private static String configVersion() {
+        try {
+            File current = currentBinary();
+            if (current == null) {
+                return null;
+            }
+            Path config = current.toPath().getParent().resolve("config.json");
+            if (!Files.isRegularFile(config)) {
+                return null;
+            }
+            return jsonString(Files.readString(config, StandardCharsets.UTF_8), "version");
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private static BuildInfo currentBuildInfo() {
@@ -128,31 +189,59 @@ public final class ClientUpdater {
         }
     }
 
-    private static void writeApplyScript(Path script, Path download, Path current) throws Exception {
-        if (isWindows()) {
-            String restart = current.toString().toLowerCase(Locale.ROOT).endsWith(".jar")
-                    ? "start \"\" javaw -Xmx1g -jar \"" + current + "\"\r\n"
-                    : "start \"\" \"" + current + "\"\r\n";
-            String body =
-                    "@echo off\r\n" +
-                    "timeout /t 2 /nobreak >nul\r\n" +
-                    "move /y \"" + download + "\" \"" + current + "\"\r\n" +
-                    restart +
-                    "del \"%~f0\"\r\n";
-            Files.writeString(script, body, StandardCharsets.UTF_8);
-        } else {
-            String restart = current.toString().endsWith(".jar")
-                    ? "java -Xmx1g -jar \"" + current + "\" &\n"
-                    : "\"" + current + "\" &\n";
-            String body =
-                    "#!/bin/sh\n" +
-                    "sleep 2\n" +
-                    "mv \"" + download + "\" \"" + current + "\"\n" +
-                    restart +
-                    "rm -- \"$0\"\n";
-            Files.writeString(script, body, StandardCharsets.UTF_8);
-            script.toFile().setExecutable(true);
+    private static List<String> restartCommand(Path current) {
+        String currentName = current.toString().toLowerCase(Locale.ROOT);
+        if (!currentName.endsWith(".jar")) {
+            return List.of(current.toString());
         }
+
+        List<String> command = new ArrayList<>();
+        command.add(javawPath());
+
+        String[] processArgs = ProcessHandle.current().info().arguments().orElse(null);
+        int jarIndex = indexOfJarFlag(processArgs);
+        if (jarIndex >= 0 && jarIndex + 1 < processArgs.length) {
+            for (int i = 0; i < jarIndex; i++) {
+                command.add(processArgs[i]);
+            }
+            command.add("-jar");
+            command.add(current.toString());
+            for (int i = jarIndex + 2; i < processArgs.length; i++) {
+                command.add(processArgs[i]);
+            }
+            return command;
+        }
+
+        command.addAll(ManagementFactory.getRuntimeMXBean().getInputArguments());
+        command.add("-Xmx1g");
+        command.add("-Dsun.java2d.noddraw=true");
+        command.add("--enable-native-access=ALL-UNNAMED");
+        command.add("--add-opens");
+        command.add("java.base/java.lang=ALL-UNNAMED");
+        command.add("--add-opens");
+        command.add("java.base/java.lang.reflect=ALL-UNNAMED");
+        command.add("-jar");
+        command.add(current.toString());
+        return command;
+    }
+
+    private static int indexOfJarFlag(String[] args) {
+        if (args == null) return -1;
+        for (int i = 0; i < args.length; i++) {
+            if ("-jar".equalsIgnoreCase(args[i])) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static String javawPath() {
+        File javaw = new File(System.getProperty("java.home"), "bin" + File.separator + (isWindows() ? "javaw.exe" : "javaw"));
+        if (javaw.isFile()) {
+            return javaw.getPath();
+        }
+        File java = new File(System.getProperty("java.home"), "bin" + File.separator + (isWindows() ? "java.exe" : "java"));
+        return java.isFile() ? java.getPath() : (isWindows() ? "javaw" : "java");
     }
 
     private static String httpGet(String url) throws Exception {
