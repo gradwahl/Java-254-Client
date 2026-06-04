@@ -1948,6 +1948,7 @@ public class Client extends GameShell {
 			glRenderer.recordTick();
 		}
 		loopCycle++;
+		ClientDebugger.onLoopHeartbeat(loopCycle);
 		if (this.ingame) {
 			this.gameLoop();
 		} else {
@@ -1964,13 +1965,18 @@ public class Client extends GameShell {
 		}
 		if (glRenderer != null) {
 			if (glRenderer.shouldClose()) { this.state = -1; return; }
+			if (glRenderer.isRenderPaused()) { return; }
 			boolean drawScene = !this.ingame || this.sceneState == 2;
 			glRenderer.beginFrame(this.ingame && drawScene, drawScene);
+			if (!glRenderer.isFrameDrawable()) { return; }
 		}
 		drawCycle++;
+		ClientDebugger.onDrawHeartbeat(drawCycle);
 		// Publish the render-time interpolation state for entity model building.
-		ClientEntity.renderInterpOn = GLRenderer.settingFps60Enabled;
-		ClientEntity.renderInterp = GLRenderer.settingFps60Enabled ? super.subTickFraction : 0f;
+		boolean interpolateEntities = GLRenderer.isHighFpsEffectiveEnabled()
+			&& (glRenderer == null || !glRenderer.shouldSuppressInterpolation());
+		ClientEntity.renderInterpOn = interpolateEntities;
+		ClientEntity.renderInterp = interpolateEntities ? super.subTickFraction : 0f;
 		if (this.ingame) {
 			this.gameDraw();
 		} else {
@@ -5029,7 +5035,7 @@ public class Client extends GameShell {
 
 	@Override
 	protected boolean isHighFpsEnabled() {
-		return GLRenderer.settingFps60Enabled;
+		return GLRenderer.isHighFpsEffectiveEnabled();
 	}
 
 	private void updateEntityAnimationStep() {
@@ -5536,14 +5542,11 @@ public class Client extends GameShell {
 				var2 = this.cameraModifierWobbleScale[4] + 128;
 			}
 			int var3 = this.orbitCameraYaw + this.macroCameraAngle & 0x7FF;
-			// Interpolate the camera target (and the focus height from the local
-			// player's interpolated position) so the camera tracks smoothly at the
-			// render rate instead of stepping at 50fps.
-			int camX = this.interpOrbitCameraX();
-			int camZ = this.interpOrbitCameraZ();
-			int focusX = this.interpSceneX(localPlayer);
-			int focusZ = this.interpSceneZ(localPlayer);
-			this.camFollow(var2, camX, this.getAvH(focusZ, this.minusedlevel, focusX) - 50, camZ, var2 * 3 + 600, var3);
+			// Keep terrain camera/focus on exact tick positions. Sub-tick camera
+			// interpolation can feed intermediate values into the world visibility
+			// and projective texture math, causing transient black terrain flashes
+			// on some GPUs in 60 FPS mode.
+			this.camFollow(var2, this.orbitCameraX, this.getAvH(localPlayer.z, this.minusedlevel, localPlayer.x) - 50, this.orbitCameraZ, var2 * 3 + 600, var3);
 		}
 		int var4;
 		if (this.cutscene) {

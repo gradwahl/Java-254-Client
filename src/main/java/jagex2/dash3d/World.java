@@ -1,5 +1,6 @@
 package jagex2.dash3d;
 
+import com.gradwahl.rs254.ClientDebugger;
 import deob.ObfuscatedName;
 import jagex2.datastruct.LinkList;
 import jagex2.graphics.Pix2D;
@@ -1177,7 +1178,19 @@ public class World {
 	@ObfuscatedName("s.a(Lw;Z)V")
 	public void fill(Square arg0, boolean arg1) {
 		fillQueue.push(arg0);
+		int guard = 0;
 		while (true) {
+			if (++guard > 20000) {
+				ClientDebugger.log("[WORLD] fill guard tripped"
+					+ " start=" + arg0.x + "," + arg0.z + "," + arg0.level
+					+ " currentCameraTile=" + gx + "," + gz
+					+ " topLevel=" + topLevel
+					+ " fillLeft=" + fillLeft
+					+ " cycleNo=" + cycleNo);
+				fillQueue.clear();
+				fillLeft = 0;
+				return;
+			}
 			Square var3;
 			int var4;
 			int var5;

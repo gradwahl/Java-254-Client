@@ -23,7 +23,7 @@ fi
 
 find src/main/java -name "*.java" > sources.txt
 
-javac -J-Xmx512m --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes @sources.txt
+javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes @sources.txt
 rm sources.txt
 
 # Fold runtime dependencies and LWJGL natives into the artifact so the JAR can
@@ -34,7 +34,10 @@ done
 rm -f target/classes/META-INF/MANIFEST.MF
 rm -f target/classes/META-INF/*.SF target/classes/META-INF/*.DSA target/classes/META-INF/*.RSA
 
-printf 'Manifest-Version: 1.0\n\n' > target/manifest.mf
+BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+CLIENT_VERSION="${CLIENT_VERSION:-1.6}"
+CLIENT_VERSION="${CLIENT_VERSION#v}"
+printf 'Manifest-Version: 1.0\nImplementation-Version: %s\nBuild-Time: %s\n\n' "$CLIENT_VERSION" "$BUILD_TIME" > target/manifest.mf
 
 jar --create --file target/Progressive-Java-Client.jar \
     --main-class com.gradwahl.rs254.Main \

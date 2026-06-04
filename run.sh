@@ -66,6 +66,7 @@ mkdir -p "$SCRIPT_DIR/logs"
 
 echo "Starting RS2 client (HTTP :80, game :43594)..."
 java \
+    -Xmx1g \
     -Drs254.logDir="$SCRIPT_DIR/logs" \
     --enable-native-access=ALL-UNNAMED \
     --add-opens java.base/java.lang=ALL-UNNAMED \

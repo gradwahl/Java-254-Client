@@ -154,11 +154,12 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 		}
 		long var7 = System.currentTimeMillis();
 		// High-FPS (interpolated render) bookkeeping. In this mode the game logic
-		// still ticks on the fixed server-compatible schedule, but draw() runs
-		// every monitor refresh and animations are interpolated between ticks.
+		// still ticks on the fixed server-compatible schedule, but draw() targets
+		// 60fps instead of inheriting 120/144/240Hz monitor refresh rates.
 		long highFpsLast = System.currentTimeMillis();
 		long logicAccumMs = 0L;
 		boolean wasHighFps = this.isHighFpsEnabled();
+		long nextHighFpsFrame = System.currentTimeMillis();
 		while (true) {
 			long var11;
 			do {
@@ -179,6 +180,7 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 				if (highFpsEnabled != wasHighFps) {
 					long now = System.currentTimeMillis();
 					highFpsLast = now;
+					nextHighFpsFrame = now;
 					logicAccumMs = 0L;
 					this.subTickFraction = 0f;
 					if (!highFpsEnabled) {
@@ -195,6 +197,15 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 				if (highFpsEnabled) {
 					// ---- decoupled path: fixed-timestep logic + interpolated draw ----
 					var11 = System.currentTimeMillis();
+					long frameDelay = nextHighFpsFrame - var11;
+					if (frameDelay > 0L) {
+						try {
+							Thread.sleep(Math.min(frameDelay, 16L));
+						} catch (InterruptedException ignored) {
+						}
+						var11 = System.currentTimeMillis();
+					}
+					nextHighFpsFrame = var11 + 16L;
 					long elapsed = var11 - highFpsLast;
 					highFpsLast = var11;
 					if (elapsed < 0L) {
@@ -294,6 +305,7 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 					// Keep the high-fps clock fresh so flipping the toggle on mid-session
 					// doesn't replay a huge accumulated delta as a burst of logic ticks.
 					highFpsLast = System.currentTimeMillis();
+					nextHighFpsFrame = highFpsLast;
 					logicAccumMs = 0L;
 				}
 			} while (!this.debug);
