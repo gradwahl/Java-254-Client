@@ -5,6 +5,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -13,6 +15,10 @@ public final class Main {
 
     public static void main(String[] args) throws Exception {
         setupErrorLogging();
+        applyEarlyGraphicsProperties();
+        relaunchJarWithOneGbHeapIfNeeded(args);
+        com.gradwahl.rs254.update.ClientUpdater.ensureUpdaterExtracted();
+        ClientDebugger.enable();
 
         ClientConfig config = ClientConfig.load();
         applyConfig(config);
@@ -21,6 +27,41 @@ public final class Main {
         // Override via args: java -jar client.jar 10 0 highmem members 32
         String[] clientArgs = args.length == 5 ? args : new String[]{"10", "0", "highmem", "members", "32"};
         jagex2.client.Client.main(clientArgs);
+    }
+
+    private static void relaunchJarWithOneGbHeapIfNeeded(String[] args) throws Exception {
+        if (Boolean.getBoolean("rs254.heapRelaunched") || Runtime.getRuntime().maxMemory() >= 900L * 1024L * 1024L) {
+            return;
+        }
+        File current = new File(Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+        if (!current.isFile() || !current.getName().toLowerCase().endsWith(".jar")) {
+            return;
+        }
+
+        String javaBin = new File(System.getProperty("java.home"), "bin" + File.separator + "javaw").getPath();
+        if (!new File(javaBin + (isWindows() ? ".exe" : "")).exists()) {
+            javaBin = new File(System.getProperty("java.home"), "bin" + File.separator + "java").getPath();
+        }
+
+        List<String> command = new ArrayList<>();
+        command.add(javaBin);
+        command.add("-Xmx1g");
+        command.add("-Drs254.heapRelaunched=true");
+        command.add("-Dsun.java2d.noddraw=true");
+        command.add("--enable-native-access=ALL-UNNAMED");
+        command.add("--add-opens");
+        command.add("java.base/java.lang=ALL-UNNAMED");
+        command.add("--add-opens");
+        command.add("java.base/java.lang.reflect=ALL-UNNAMED");
+        command.add("-jar");
+        command.add(current.getPath());
+        for (String arg : args) {
+            command.add(arg);
+        }
+        new ProcessBuilder(command)
+                .directory(current.getParentFile())
+                .start();
+        System.exit(0);
     }
 
     private static void applyConfig(ClientConfig config) {
@@ -33,7 +74,17 @@ public final class Main {
         }
     }
 
+    private static void applyEarlyGraphicsProperties() {
+        // Must be set before any AWT/Java2D classes create a Windows DirectDraw pipeline.
+        System.setProperty("sun.java2d.noddraw", "true");
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name", "").toLowerCase().contains("win");
+    }
+
     private static void setupErrorLogging() {
+        ErrorLogOutputStream.ensureLogDir();
         System.setErr(new PrintStream(new ErrorLogOutputStream(System.err), true));
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
             System.err.println("\nCRASH on thread [" + t.getName() + "] at " + LocalDateTime.now());
@@ -52,6 +103,10 @@ public final class Main {
 
         private ErrorLogOutputStream(PrintStream console) {
             this.console = console;
+        }
+
+        private static void ensureLogDir() {
+            resolveLogDir().mkdirs();
         }
 
         @Override
@@ -94,7 +149,7 @@ public final class Main {
             }
         }
 
-        private File resolveLogDir() {
+        private static File resolveLogDir() {
             File base;
             String configuredLogDir = System.getProperty("rs254.logDir");
             if (configuredLogDir != null && !configuredLogDir.isBlank()) {

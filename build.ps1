@@ -18,7 +18,7 @@ if (Test-Path src/main/resources) {
 Get-ChildItem -Recurse src/main/java -Filter *.java | ForEach-Object FullName | Set-Content sources.txt
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-javac -J-Xmx512m --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes '@sources.txt'
+javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes '@sources.txt'
 $javacExitCode = $LASTEXITCODE
 $ErrorActionPreference = $previousErrorActionPreference
 Remove-Item sources.txt -Force
@@ -44,10 +44,29 @@ Remove-Item target/classes/META-INF/*.SF -Force -ErrorAction SilentlyContinue
 Remove-Item target/classes/META-INF/*.DSA -Force -ErrorAction SilentlyContinue
 Remove-Item target/classes/META-INF/*.RSA -Force -ErrorAction SilentlyContinue
 
+$clientVersion = if ($env:CLIENT_VERSION) { $env:CLIENT_VERSION.TrimStart("v") } else { "1.7" }
+@"
+{
+  "version": "$clientVersion",
+  "web_host": "localhost",
+  "web_port": 80,
+  "game_port": 43594
+}
+"@ | Set-Content -Encoding UTF8 target/config.json
 @"
 Manifest-Version: 1.0
+Implementation-Version: $clientVersion
+Build-Time: $((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
 
 "@ | Set-Content -Encoding ascii target/manifest.mf
+
+# Build the updater jar first, then fold it into the client classes so it ships
+# *inside* the client jar. At runtime the client extracts it back beside itself.
+jar --create --file target/Progressive-Java-Updater.jar --main-class com.gradwahl.rs254.update.UpdateHelper -C target/classes com/gradwahl/rs254/update
+if ($LASTEXITCODE -ne 0) {
+    throw "updater jar failed with exit code $LASTEXITCODE"
+}
+Copy-Item target/Progressive-Java-Updater.jar target/classes/Progressive-Java-Updater.jar -Force
 
 jar --create --file target/Progressive-Java-Client.jar --main-class com.gradwahl.rs254.Main --manifest target/manifest.mf -C target/classes .
 if ($LASTEXITCODE -ne 0) {
@@ -56,6 +75,7 @@ if ($LASTEXITCODE -ne 0) {
 Remove-Item target/manifest.mf
 
 Write-Host "Build complete: target/Progressive-Java-Client.jar"
+Write-Host "Build complete: target/Progressive-Java-Updater.jar"
 
 # Wrap the JAR in a single .exe with the custom icon using Launch4j.
 $launch4jc = "C:\Program Files (x86)\Launch4j\launch4jc.exe"
@@ -71,12 +91,13 @@ if (Test-Path $launch4jc) {
   <headerType>gui</headerType>
   <jar>$jarAbsPath</jar>
   <outfile>$exeAbsPath</outfile>
+  <chdir>.</chdir>
   <errTitle>Progressive Java Client</errTitle>
   <icon>$icoAbsPath</icon>
   <jre>
     <path></path>
     <minVersion>17</minVersion>
-    <opt>-Dsun.java2d.noddraw=true --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED</opt>
+    <opt>-Xmx1g -Dsun.java2d.noddraw=true -Drs254.logDir=logs -XX:ErrorFile=logs\jvm_crash.log --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED</opt>
   </jre>
   <cmdLine>10 0 highmem members 32</cmdLine>
   <versionInfo>

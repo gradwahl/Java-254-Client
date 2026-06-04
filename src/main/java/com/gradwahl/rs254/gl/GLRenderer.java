@@ -5,6 +5,7 @@ import jagex2.client.Client;
 import jagex2.graphics.Pix3D;
 import jagex2.graphics.PixMap;
 import jagex2.graphics.TriangleRenderer;
+import com.gradwahl.rs254.ClientDebugger;
 import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.system.MemoryUtil;
@@ -43,6 +44,7 @@ import javax.swing.text.html.HTML;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 
+import com.gradwahl.rs254.ClientConfig;
 import com.gradwahl.rs254.discord.DiscordRichPresence;
 
 import static org.lwjgl.glfw.Callbacks.glfwFreeCallbacks;
@@ -411,6 +413,11 @@ public final class GLRenderer implements TriangleRenderer {
     private long     window;
     private int      vao, vbo, prog;
     private int      uScreen, uTex;
+    private boolean  frameDrawable = true;
+    private boolean  windowIconified;
+    private int      framebufferW = 1;
+    private int      framebufferH = 1;
+    private int      restoreCooldownFrames;
 
     private final FloatBuffer buf =
             MemoryUtil.memAllocFloat(MAX_VERTS * FLOATS_PER_VERT);
@@ -491,6 +498,7 @@ public final class GLRenderer implements TriangleRenderer {
     public static volatile boolean settingShiftExamineAnything;
     public static volatile boolean settingDiscordRichPresence;
     public static volatile boolean settingFps60Enabled;
+    private static volatile long settingFps60SuppressedUntilMs;
     private boolean sidebarOpen;
     private int     sidebarTab;
     private boolean sidebarGpuEnabled   = true;
@@ -499,6 +507,7 @@ public final class GLRenderer implements TriangleRenderer {
     private boolean settingsFullscreen  = false;
     private boolean settingsAfkDropdownOpen;
     private int     settingsAfkIndex    = SETTINGS_PREFS.getInt("afkIndex", 0);
+    private final String clientVersionText = "Version: " + ClientConfig.currentVersionLabel();
 
     // XP session tracking — updated by Client when XP packets arrive
     public static final long[] xpSessionGains = new long[25];
@@ -675,8 +684,7 @@ public final class GLRenderer implements TriangleRenderer {
         glUniform1i(uTex, 0);
 
         glClearColor(0f, 0f, 0f, 1f);
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        restoreSceneGlState();
 
         setupUIPass();
         setupCallbacks();
@@ -746,6 +754,31 @@ public final class GLRenderer implements TriangleRenderer {
         return glfwWindowShouldClose(window);
     }
 
+    /**
+     * Poll events and report whether the OS has removed the drawable surface.
+     * Windows commonly reports a 0x0 framebuffer while minimized; several GL
+     * drivers crash hard if we keep uploading/drawing/swap-buffering then.
+     */
+    public boolean isRenderPaused() {
+        glfwPollEvents();
+        if (window == NULL || windowIconified || glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE) {
+            ClientDebugger.onRenderPauseState(true, "iconified", framebufferW, framebufferH);
+            sleepWhileRenderPaused();
+            return true;
+        }
+        int[] fw = new int[1], fh = new int[1];
+        glfwGetFramebufferSize(window, fw, fh);
+        framebufferW = fw[0];
+        framebufferH = fh[0];
+        boolean paused = framebufferW <= 0 || framebufferH <= 0;
+        ClientDebugger.onRenderPauseState(paused, paused ? "zero-framebuffer" : "drawable",
+                framebufferW, framebufferH);
+        if (paused) {
+            sleepWhileRenderPaused();
+        }
+        return paused;
+    }
+
     @Override
     public void beginFrame() {
         beginFrame(true);
@@ -757,6 +790,10 @@ public final class GLRenderer implements TriangleRenderer {
 
     public void beginFrame(boolean clearViewport, boolean clearScene) {
         glfwPollEvents();
+        frameDrawable = !isRenderPaused();
+        if (!frameDrawable) {
+            return;
+        }
         if (clearScene) {
             glClear(GL_COLOR_BUFFER_BIT);
         }
@@ -775,12 +812,59 @@ public final class GLRenderer implements TriangleRenderer {
 
     @Override
     public void endFrame() {
+        if (!frameDrawable) {
+            return;
+        }
         flushBatch();
+        if (restoreCooldownFrames > 0) {
+            restoreCooldownFrames--;
+            glfwSwapBuffers(window);
+            return;
+        }
         drawUIOverlay();
         sampledFrames++;
         updateMetrics();
         drawStatsOverlay();
         glfwSwapBuffers(window);
+    }
+
+    private void sleepWhileRenderPaused() {
+        try {
+            Thread.sleep(50L);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    public boolean isFrameDrawable() {
+        return frameDrawable;
+    }
+
+    public boolean shouldSuppressInterpolation() {
+        return !isHighFpsEffectiveEnabled();
+    }
+
+    private void beginRestoreCooldown() {
+        restoreCooldownFrames = Math.max(restoreCooldownFrames, 30);
+        settingFps60SuppressedUntilMs = Math.max(settingFps60SuppressedUntilMs,
+                System.currentTimeMillis() + 1000L);
+        restoreSceneGlState();
+    }
+
+    public static boolean isHighFpsEffectiveEnabled() {
+        return settingFps60Enabled && System.currentTimeMillis() >= settingFps60SuppressedUntilMs;
+    }
+
+    private void restoreSceneGlState() {
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glActiveTexture(GL_TEXTURE0);
+        glUseProgram(prog);
+        glUniform2f(uScreen, screenW, screenH);
+        glUniform1i(uTex, 0);
     }
 
     public void recordTick() {
@@ -876,12 +960,13 @@ public final class GLRenderer implements TriangleRenderer {
 
         ByteBuffer rgba = MemoryUtil.memAlloc(size * size * 4);
         try {
+            boolean transparent = Pix3D.textureTranslucent[texId];
             for (int i = 0; i < size * size; i++) {
                 int c = texels[i];
                 rgba.put((byte) (c >> 16));           // R
                 rgba.put((byte) (c >>  8));           // G
                 rgba.put((byte)  c);                  // B
-                rgba.put(c == 0 ? (byte) 0 : (byte) -1); // A: 0 = transparent
+                rgba.put(transparent && c == 0 ? (byte) 0 : (byte) -1);
             }
             rgba.flip();
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0,
@@ -2708,7 +2793,9 @@ public final class GLRenderer implements TriangleRenderer {
 
         y = drawSettingsSectionTitle(x, y, "Client Settings");
         y = drawSettingsToggleRow(x, y, "60 Fps Mode", sidebarFpsEnabled);
-        drawSettingsToggleRow(x, y, "Fullscreen Mode", settingsFullscreen);
+        y = drawSettingsToggleRow(x, y, "Fullscreen Mode", settingsFullscreen);
+        y += 4;
+        drawClientVersionText(x, y);
     }
 
     private void loadSettings() {
@@ -2739,6 +2826,11 @@ public final class GLRenderer implements TriangleRenderer {
         drawUiTextFittedFull(text, x + 16, y + 5, panelW - 72, 0, 0xFFDCDCDC);
         drawToggle(x + panelW - 48, y + 2, enabled);
         return y + 20;
+    }
+
+    private void drawClientVersionText(int x, int y) {
+        int panelW = sidebarPanelW();
+        drawUiTextFittedFull(clientVersionText, x + 16, y + 5, panelW - 32, 0, 0xFF999999);
     }
 
     private void drawSelectBox(int x, int y, int w, String text, boolean open) {
@@ -3230,8 +3322,29 @@ public final class GLRenderer implements TriangleRenderer {
             }
         });
 
-        glfwSetFramebufferSizeCallback(window, (win, width, height) ->
-                updateOutputViewport(width, height));
+        glfwSetFramebufferSizeCallback(window, (win, width, height) -> {
+            framebufferW = width;
+            framebufferH = height;
+            frameDrawable = !windowIconified && width > 0 && height > 0;
+            ClientDebugger.onRenderPauseState(!frameDrawable,
+                    frameDrawable ? "drawable" : "framebuffer-callback",
+                    framebufferW, framebufferH);
+            if (frameDrawable) {
+                beginRestoreCooldown();
+                updateOutputViewport(width, height);
+            }
+        });
+        glfwSetWindowIconifyCallback(window, (win, iconified) -> {
+            windowIconified = iconified;
+            frameDrawable = !iconified && framebufferW > 0 && framebufferH > 0;
+            ClientDebugger.onRenderPauseState(!frameDrawable,
+                    iconified ? "iconify-callback" : "restore-callback",
+                    framebufferW, framebufferH);
+            if (frameDrawable) {
+                beginRestoreCooldown();
+                updateOutputViewport();
+            }
+        });
         glfwSetWindowSizeCallback(window, (win, width, height) -> {
             windowW = width;
             windowH = height;
@@ -3617,7 +3730,7 @@ public final class GLRenderer implements TriangleRenderer {
         rowY += 18;
         if (toggleHit(px, rowY, x, y)) { setFps60(!sidebarFpsEnabled); return; }
         rowY += 20;
-        if (toggleHit(px, rowY, x, y)) toggleFullscreen();
+        if (toggleHit(px, rowY, x, y)) { toggleFullscreen(); return; }
     }
 
     private boolean toggleHit(int px, int rowY, int mouseX, int mouseY) {

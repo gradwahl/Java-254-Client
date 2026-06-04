@@ -5,7 +5,7 @@
 
     <groupId>com.gradwahl</groupId>
     <artifactId>Progressive-Java-Client</artifactId>
-    <version>0.1.0</version>
+    <version>1.7</version>
     <name>Progressive Java Client</name>
 
     <properties>
@@ -172,6 +172,10 @@
                     <transformers>
                         <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                             <mainClass>com.gradwahl.rs254.Main</mainClass>
+                            <manifestEntries>
+                                <Implementation-Version>${project.version}</Implementation-Version>
+                                <Build-Time>${maven.build.timestamp}</Build-Time>
+                            </manifestEntries>
                         </transformer>
                     </transformers>
                 </configuration>

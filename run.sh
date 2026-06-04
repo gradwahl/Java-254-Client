@@ -58,7 +58,7 @@ if [ "$MISSING" -eq 1 ]; then
     REBUILD=1
 fi
 
-if [ ! -f target/Progressive-Java-Client.jar ] || [ "$REBUILD" -eq 1 ]; then
+if [ ! -f target/Progressive-Java-Client.jar ] || [ ! -f target/Progressive-Java-Updater.jar ] || [ "$REBUILD" -eq 1 ]; then
     bash build.sh
 fi
 
@@ -66,6 +66,7 @@ mkdir -p "$SCRIPT_DIR/logs"
 
 echo "Starting RS2 client (HTTP :80, game :43594)..."
 java \
+    -Xmx1g \
     -Drs254.logDir="$SCRIPT_DIR/logs" \
     --enable-native-access=ALL-UNNAMED \
     --add-opens java.base/java.lang=ALL-UNNAMED \

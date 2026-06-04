@@ -22,6 +22,13 @@ jobs:
           java-version: "17"
           cache: maven
 
+      # For tag builds, stamp the project version from the tag (v1.7 -> 1.7) so the jar's
+      # Implementation-Version matches the release. Without this the manifest keeps the
+      # hardcoded pom version and the updater re-downloads the same release forever.
+      - name: Set release version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: mvn --batch-mode versions:set -DnewVersion="${GITHUB_REF_NAME#v}" -DgenerateBackupPoms=false
+
       - name: Build
         run: mvn --batch-mode clean package
 

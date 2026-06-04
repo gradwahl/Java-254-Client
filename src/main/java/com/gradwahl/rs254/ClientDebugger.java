@@ -1,14 +1,16 @@
 package com.gradwahl.rs254;
 
+import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Lightweight session debugger. Writes timestamped events to debug.log.
+ * Lightweight session debugger. Writes timestamped events to logs/debug.log.
  * Call ClientDebugger.enable() once at startup to activate.
  *
  * Detects:
@@ -33,10 +35,19 @@ public final class ClientDebugger {
 
     private static volatile boolean enabled = false;
     private static PrintWriter out;
+    private static File logDir;
 
     // render flash detection
     private static final AtomicLong lastRenderNs = new AtomicLong(0);
     private static final long FLASH_THRESHOLD_MS = 50;
+    private static final long MINIMIZED_HANG_THRESHOLD_MS = 5_000L;
+    private static final AtomicLong lastLoopNs = new AtomicLong(System.nanoTime());
+    private static final AtomicLong lastDrawNs = new AtomicLong(System.nanoTime());
+    private static volatile boolean renderPaused;
+    private static volatile String renderPauseReason = "startup";
+    private static volatile int lastLoopCycle;
+    private static volatile int lastDrawCycle;
+    private static volatile long lastThreadDumpAtMs;
 
     // state snapshot at logout time
     public static volatile int lastIdleCycles   = 0;
@@ -45,9 +56,12 @@ public final class ClientDebugger {
     public static void enable() {
         if (enabled) return;
         try {
-            out = new PrintWriter(new FileWriter("debug.log", true), true);
+            logDir = resolveLogDir();
+            logDir.mkdirs();
+            out = new PrintWriter(new FileWriter(new File(logDir, "debug.log"), true), true);
             enabled = true;
             log("=== ClientDebugger enabled ===");
+            startWatchdog();
         } catch (IOException e) {
             System.err.println("[debug] Could not open debug.log: " + e.getMessage());
         }
@@ -132,9 +146,112 @@ public final class ClientDebugger {
         }
     }
 
+    public static void onLoopHeartbeat(int loopCycle) {
+        if (!enabled) return;
+        lastLoopCycle = loopCycle;
+        lastLoopNs.set(System.nanoTime());
+    }
+
+    public static void onDrawHeartbeat(int drawCycle) {
+        if (!enabled) return;
+        lastDrawCycle = drawCycle;
+        lastDrawNs.set(System.nanoTime());
+    }
+
+    public static void onRenderPauseState(boolean paused, String reason, int framebufferW, int framebufferH) {
+        if (!enabled) return;
+        if (renderPaused != paused || !reason.equals(renderPauseReason)) {
+            renderPaused = paused;
+            renderPauseReason = reason;
+            log("[WINDOW] renderPaused=" + paused
+                    + " reason=" + reason
+                    + " framebuffer=" + framebufferW + "x" + framebufferH
+                    + " loopCycle=" + lastLoopCycle
+                    + " drawCycle=" + lastDrawCycle);
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
+
+    private static void startWatchdog() {
+        Thread watchdog = new Thread(() -> {
+            while (enabled) {
+                try {
+                    Thread.sleep(1000L);
+                    checkForMinimizedHang();
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                    return;
+                } catch (Throwable t) {
+                    System.err.println("[debug] Watchdog error: " + t);
+                }
+            }
+        }, "minimize-hang-watchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
+    }
+
+    private static void checkForMinimizedHang() throws IOException {
+        if (!renderPaused) return;
+        long nowNs = System.nanoTime();
+        long loopGapMs = (nowNs - lastLoopNs.get()) / 1_000_000L;
+        long drawGapMs = (nowNs - lastDrawNs.get()) / 1_000_000L;
+        if (loopGapMs < MINIMIZED_HANG_THRESHOLD_MS) {
+            return;
+        }
+
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastThreadDumpAtMs < MINIMIZED_HANG_THRESHOLD_MS) {
+            return;
+        }
+        lastThreadDumpAtMs = nowMs;
+        log("[WATCHDOG] possible minimized hang"
+                + " reason=" + renderPauseReason
+                + " loopGapMs=" + loopGapMs
+                + " drawGapMs=" + drawGapMs
+                + " loopCycle=" + lastLoopCycle
+                + " drawCycle=" + lastDrawCycle);
+        writeThreadDump(loopGapMs, drawGapMs);
+    }
+
+    private static void writeThreadDump(long loopGapMs, long drawGapMs) throws IOException {
+        File file = new File(logDir, "minimize_hang_threads_"
+                + DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss").format(LocalDateTime.now())
+                + ".log");
+        try (PrintWriter dump = new PrintWriter(new FileWriter(file), true)) {
+            dump.println("Minimized/render-paused hang snapshot at " + LocalDateTime.now());
+            dump.println("reason=" + renderPauseReason);
+            dump.println("loopGapMs=" + loopGapMs + " drawGapMs=" + drawGapMs);
+            dump.println("loopCycle=" + lastLoopCycle + " drawCycle=" + lastDrawCycle);
+            dump.println();
+            for (Map.Entry<Thread, StackTraceElement[]> entry : Thread.getAllStackTraces().entrySet()) {
+                Thread thread = entry.getKey();
+                dump.println("\"" + thread.getName() + "\" state=" + thread.getState()
+                        + " daemon=" + thread.isDaemon()
+                        + " priority=" + thread.getPriority());
+                for (StackTraceElement frame : entry.getValue()) {
+                    dump.println("    at " + frame);
+                }
+                dump.println();
+            }
+        }
+        log("[WATCHDOG] wrote " + file.getAbsolutePath());
+    }
+
+    private static File resolveLogDir() {
+        String configuredLogDir = System.getProperty("rs254.logDir");
+        if (configuredLogDir != null && !configuredLogDir.isBlank()) {
+            return new File(configuredLogDir);
+        }
+        try {
+            File jar = new File(ClientDebugger.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            return jar.isFile() ? new File(jar.getParentFile(), "logs") : new File("logs");
+        } catch (Exception ignored) {
+            return new File("logs");
+        }
+    }
 
     public static void log(String msg) {
         if (out == null) return;
