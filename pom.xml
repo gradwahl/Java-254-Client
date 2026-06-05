@@ -139,6 +139,26 @@
     </dependencies>
 
     <build>
+        <resources>
+            <!-- Normal resources (fonts, icon, losthq assets, maps, …) -->
+            <resource>
+                <directory>${project.basedir}/src/main/resources</directory>
+            </resource>
+            <!-- Bundle a ready-made game cache so the client can populate its
+                 local cache/ folder on first run without an on-demand server. -->
+            <resource>
+                <directory>${project.basedir}/cache</directory>
+                <targetPath>cache</targetPath>
+                <includes>
+                    <include>main_file_cache.dat</include>
+                    <include>main_file_cache.idx0</include>
+                    <include>main_file_cache.idx1</include>
+                    <include>main_file_cache.idx2</include>
+                    <include>main_file_cache.idx3</include>
+                    <include>main_file_cache.idx4</include>
+                </includes>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -175,6 +195,9 @@
                             <manifestEntries>
                                 <Implementation-Version>${project.version}</Implementation-Version>
                                 <Build-Time>${maven.build.timestamp}</Build-Time>
+                                <!-- Suppress the JDK 22+ restricted-native-access warning for
+                                     direct `java -jar` launches (LWJGL loads native libraries). -->
+                                <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
                             </manifestEntries>
                         </transformer>
                     </transformers>

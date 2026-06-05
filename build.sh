@@ -21,6 +21,19 @@ if [ -d src/main/resources ]; then
     cp -r src/main/resources/. target/classes/
 fi
 
+mkdir -p target/classes/cache
+for cache_file in \
+    main_file_cache.dat \
+    main_file_cache.idx0 \
+    main_file_cache.idx1 \
+    main_file_cache.idx2 \
+    main_file_cache.idx3 \
+    main_file_cache.idx4; do
+    if [ -f "cache/$cache_file" ]; then
+        cp "cache/$cache_file" target/classes/cache/
+    fi
+done
+
 find src/main/java -name "*.java" > sources.txt
 
 javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes @sources.txt

@@ -694,6 +694,10 @@ public final class GLRenderer implements TriangleRenderer {
     }
 
     private void setWindowIcon() {
+        // Wayland has no protocol for setting a window icon programmatically; GLFW
+        // emits "platform does not support setting the window icon" if we try.
+        // Skip on Wayland (icons there come from the app's .desktop file instead).
+        if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) return;
         try (InputStream is = GLRenderer.class.getResourceAsStream("/icon.ico")) {
             if (is == null) return;
             BufferedImage img = loadIco(is);

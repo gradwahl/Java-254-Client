@@ -15,6 +15,22 @@ if (Test-Path src/main/resources) {
     Copy-Item -Recurse src/main/resources/* target/classes/ -Force
 }
 
+$cacheFiles = @(
+    "main_file_cache.dat",
+    "main_file_cache.idx0",
+    "main_file_cache.idx1",
+    "main_file_cache.idx2",
+    "main_file_cache.idx3",
+    "main_file_cache.idx4"
+)
+New-Item -ItemType Directory -Force target/classes/cache | Out-Null
+foreach ($cacheFile in $cacheFiles) {
+    $source = Join-Path "cache" $cacheFile
+    if (Test-Path $source) {
+        Copy-Item $source target/classes/cache/ -Force
+    }
+}
+
 Get-ChildItem -Recurse src/main/java -Filter *.java | ForEach-Object FullName | Set-Content sources.txt
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
