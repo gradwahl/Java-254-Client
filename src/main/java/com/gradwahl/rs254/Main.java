@@ -3,8 +3,11 @@ package com.gradwahl.rs254;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.time.LocalDateTime;
@@ -19,6 +22,8 @@ public final class Main {
         relaunchJarWithOneGbHeapIfNeeded(args);
         com.gradwahl.rs254.update.ClientUpdater.ensureUpdaterExtracted();
         ClientDebugger.enable();
+
+        prepareBundledCache();
 
         ClientConfig config = ClientConfig.load();
         applyConfig(config);
@@ -62,6 +67,107 @@ public final class Main {
                 .directory(current.getParentFile())
                 .start();
         System.exit(0);
+    }
+
+    /** Cache files bundled in the JAR under /cache and extracted on first run. */
+    private static final String[] BUNDLED_CACHE_FILES = {
+        "main_file_cache.dat",
+        "main_file_cache.idx0",
+        "main_file_cache.idx1",
+        "main_file_cache.idx2",
+        "main_file_cache.idx3",
+        "main_file_cache.idx4",
+    };
+
+    /**
+     * Resolve a fixed cache directory next to the JAR (independent of the
+     * working directory the client was launched from) and, on first run,
+     * populate it from the cache bundled inside the JAR. This lets the client
+     * render without a running on-demand download server.
+     *
+     * Both cache consumers are pointed at this directory: the legacy signlink
+     * store reads {@code rs254.cache.dir}, the newer DiskCache/RemoteCache
+     * layer reads {@code rs254.cacheDir}.
+     */
+    private static void prepareBundledCache() {
+        File cacheDir = resolveCacheDir();
+        String path = cacheDir.getAbsolutePath();
+        if (System.getProperty("rs254.cache.dir") == null) {
+            System.setProperty("rs254.cache.dir", path);
+        }
+        if (System.getProperty("rs254.cacheDir") == null) {
+            System.setProperty("rs254.cacheDir", path);
+        }
+
+        if (hasCompleteCache(cacheDir)) {
+            return; // a populated cache already exists — never clobber it
+        }
+        if (Main.class.getResource("/cache/main_file_cache.dat") == null) {
+            return; // no cache bundled in this build — nothing to extract
+        }
+        if (!cacheDir.isDirectory() && !cacheDir.mkdirs()) {
+            System.err.println("[Cache] Could not create cache dir: " + cacheDir);
+            return;
+        }
+
+        for (String name : BUNDLED_CACHE_FILES) {
+            try (InputStream in = Main.class.getResourceAsStream("/cache/" + name)) {
+                if (in == null) continue;
+                Files.copy(in, new File(cacheDir, name).toPath(), StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e) {
+                System.err.println("[Cache] Failed to extract " + name + ": " + e.getMessage());
+            }
+        }
+        System.out.println("[Cache] Extracted bundled cache to " + cacheDir);
+    }
+
+    private static File resolveCacheDir() {
+        String override = System.getProperty("rs254.cache.dir");
+        if (override != null && !override.isBlank()) {
+            return new File(override);
+        }
+
+        try {
+            File jar = new File(Main.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+            if (jar.isFile()) {
+                File besideJar = new File(jar.getParentFile(), "cache");
+                if (canUseCacheDir(besideJar)) {
+                    return besideJar;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        String home = System.getProperty("user.home");
+        if (home != null && !home.isBlank()) {
+            File userCache = new File(home, ".progressive-java-client" + File.separator + "file_store_32");
+            if (canUseCacheDir(userCache)) {
+                return userCache;
+            }
+        }
+
+        return new File("cache");
+    }
+
+    private static boolean hasCompleteCache(File cacheDir) {
+        for (String name : BUNDLED_CACHE_FILES) {
+            File file = new File(cacheDir, name);
+            if (!file.isFile() || file.length() == 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean canUseCacheDir(File dir) {
+        try {
+            if (!dir.isDirectory() && !dir.mkdirs()) {
+                return false;
+            }
+            File test = File.createTempFile(".write_test", ".tmp", dir);
+            return test.delete();
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private static void applyConfig(ClientConfig config) {

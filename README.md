@@ -39,3 +39,26 @@ Not implemented yet:
 
 ```bash
 mvn package
+```
+
+## Package
+
+On Windows, use `jpackage` to build an app image with a bundled Java runtime:
+
+```powershell
+.\package.ps1
+```
+
+On macOS/Linux, use:
+
+```bash
+./build.sh
+```
+
+JARs are written to `Jar Output/`. Packaged launchers are written to `Exe Output/`. Distribute the generated app image and users can run the packaged launcher without installing Java.
+
+To build a Windows installer instead, install WiX Toolset if your JDK requires it, then run:
+
+```powershell
+.\package.ps1 -Type exe
+```
