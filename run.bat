@@ -3,16 +3,16 @@ setlocal
 cd /d "%~dp0"
 set "SCRIPT_DIR=%~dp0"
 set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
-if not exist target\Progressive-Java-Client.jar call build.bat
-if not exist target\Progressive-Java-Updater.jar call build.bat
+set "APP_EXE=%SCRIPT_DIR%\Exe Output\Progressive Java Client\Progressive Java Client.exe"
 
-if not exist "%SCRIPT_DIR%\logs" mkdir "%SCRIPT_DIR%\logs"
+if not exist "%APP_EXE%" call build.bat
+if errorlevel 1 exit /b %ERRORLEVEL%
 
-echo Starting RS2 client (HTTP :80, game :43594)...
-java -Xmx1g -Dsun.java2d.noddraw=true -Drs254.logDir="%SCRIPT_DIR%\logs" --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED -XX:ErrorFile="%SCRIPT_DIR%\logs\jvm_crash_%%p.log" -jar target\Progressive-Java-Client.jar 10 0 highmem members 32
+echo Starting packaged RS2 client...
+"%APP_EXE%"
 
 if %ERRORLEVEL% neq 0 (
     echo.
-    echo Client exited with error code %ERRORLEVEL%. Check %SCRIPT_DIR%\logs for crash logs.
+    echo Client exited with error code %ERRORLEVEL%.
 )
 pause

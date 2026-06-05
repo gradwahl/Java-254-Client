@@ -20,6 +20,8 @@ if [ "$OS" = "Darwin" ]; then
     fi
 elif [ "$OS" = "Linux" ]; then
     NATIVES_CLASSIFIER="natives-linux"
+elif [[ "$OS" == MINGW* || "$OS" == MSYS* || "$OS" == CYGWIN* ]]; then
+    NATIVES_CLASSIFIER="natives-windows"
 else
     echo "ERROR: Unsupported OS: $OS" >&2
     exit 1
@@ -58,25 +60,31 @@ if [ "$MISSING" -eq 1 ]; then
     REBUILD=1
 fi
 
-if [ ! -f target/Progressive-Java-Client.jar ] || [ ! -f target/Progressive-Java-Updater.jar ] || [ "$REBUILD" -eq 1 ]; then
+case "$OS" in
+    MINGW*|MSYS*|CYGWIN*)
+        APP_PATH="$SCRIPT_DIR/Exe Output/Progressive Java Client/Progressive Java Client.exe"
+        ;;
+    Darwin)
+        APP_PATH="$SCRIPT_DIR/Exe Output/Progressive Java Client.app/Contents/MacOS/Progressive Java Client"
+        ;;
+    Linux)
+        APP_PATH="$SCRIPT_DIR/Exe Output/Progressive Java Client/bin/Progressive Java Client"
+        ;;
+    *)
+        echo "ERROR: Unsupported OS: $OS" >&2
+        exit 1
+        ;;
+esac
+
+if [ ! -x "$APP_PATH" ] || [ "$REBUILD" -eq 1 ]; then
     bash build.sh
 fi
 
-mkdir -p "$SCRIPT_DIR/logs"
-
-echo "Starting RS2 client (HTTP :80, game :43594)..."
-java \
-    -Xmx1g \
-    -Drs254.logDir="$SCRIPT_DIR/logs" \
-    --enable-native-access=ALL-UNNAMED \
-    --add-opens java.base/java.lang=ALL-UNNAMED \
-    --add-opens java.base/java.lang.reflect=ALL-UNNAMED \
-    -XX:ErrorFile="$SCRIPT_DIR/logs/jvm_crash_%p.log" \
-    -jar target/Progressive-Java-Client.jar \
-    10 0 highmem members 32
+echo "Starting packaged RS2 client..."
+"$APP_PATH"
 
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then
     echo ""
-    echo "Client exited with error code $EXIT_CODE. Check $SCRIPT_DIR/logs for crash logs."
+    echo "Client exited with error code $EXIT_CODE."
 fi

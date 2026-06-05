@@ -139,6 +139,7 @@
     </dependencies>
 
     <build>
+        <directory>Jar Output</directory>
         <resources>
             <!-- Normal resources (fonts, icon, losthq assets, maps, …) -->
             <resource>

@@ -11,17 +11,27 @@ if ! command -v javac &>/dev/null; then
     exit 1
 fi
 
+if [ "${SKIP_JPACKAGE:-0}" != "1" ] && ! command -v jpackage &>/dev/null; then
+    echo "ERROR: jpackage not found. Install JDK 17 or newer." >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-rm -rf target
-mkdir -p target/classes
+JAR_OUTPUT_DIR="Jar Output"
+EXE_OUTPUT_DIR="Exe Output"
+CLASSES_DIR="$JAR_OUTPUT_DIR/classes"
+PACKAGE_INPUT_DIR="$JAR_OUTPUT_DIR/jpackage-input"
+
+rm -rf "$JAR_OUTPUT_DIR"
+mkdir -p "$CLASSES_DIR"
 
 if [ -d src/main/resources ]; then
-    cp -r src/main/resources/. target/classes/
+    cp -r src/main/resources/. "$CLASSES_DIR/"
 fi
 
-mkdir -p target/classes/cache
+mkdir -p "$CLASSES_DIR/cache"
 for cache_file in \
     main_file_cache.dat \
     main_file_cache.idx0 \
@@ -30,27 +40,27 @@ for cache_file in \
     main_file_cache.idx3 \
     main_file_cache.idx4; do
     if [ -f "cache/$cache_file" ]; then
-        cp "cache/$cache_file" target/classes/cache/
+        cp "cache/$cache_file" "$CLASSES_DIR/cache/"
     fi
 done
 
 find src/main/java -name "*.java" > sources.txt
 
-javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes @sources.txt
+javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d "$CLASSES_DIR" @sources.txt
 rm sources.txt
 
 # Fold runtime dependencies and LWJGL natives into the artifact so the JAR can
 # be copied and launched without a sibling lib directory.
 for dependency in lib/*.jar; do
-    (cd target/classes && jar --extract --file "../../$dependency")
+    (cd "$CLASSES_DIR" && jar --extract --file "../../$dependency")
 done
-rm -f target/classes/META-INF/MANIFEST.MF
-rm -f target/classes/META-INF/*.SF target/classes/META-INF/*.DSA target/classes/META-INF/*.RSA
+rm -f "$CLASSES_DIR/META-INF/MANIFEST.MF"
+rm -f "$CLASSES_DIR"/META-INF/*.SF "$CLASSES_DIR"/META-INF/*.DSA "$CLASSES_DIR"/META-INF/*.RSA
 
 BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 CLIENT_VERSION="${CLIENT_VERSION:-1.7}"
 CLIENT_VERSION="${CLIENT_VERSION#v}"
-cat > target/config.json <<EOF
+cat > "$JAR_OUTPUT_DIR/config.json" <<EOF
 {
   "version": "$CLIENT_VERSION",
   "web_host": "localhost",
@@ -58,23 +68,62 @@ cat > target/config.json <<EOF
   "game_port": 43594
 }
 EOF
-printf 'Manifest-Version: 1.0\nImplementation-Version: %s\nBuild-Time: %s\n\n' "$CLIENT_VERSION" "$BUILD_TIME" > target/manifest.mf
+printf 'Manifest-Version: 1.0\nImplementation-Version: %s\nBuild-Time: %s\n\n' "$CLIENT_VERSION" "$BUILD_TIME" > "$JAR_OUTPUT_DIR/manifest.mf"
 
 # Build the updater jar first, then fold it into the client classes so it ships
 # *inside* the client jar. At runtime the client extracts it back beside itself.
-jar --create --file target/Progressive-Java-Updater.jar \
+jar --create --file "$JAR_OUTPUT_DIR/Progressive-Java-Updater.jar" \
     --main-class com.gradwahl.rs254.update.UpdateHelper \
-    -C target/classes com/gradwahl/rs254/update
+    -C "$CLASSES_DIR" com/gradwahl/rs254/update
 
-cp target/Progressive-Java-Updater.jar target/classes/Progressive-Java-Updater.jar
+cp "$JAR_OUTPUT_DIR/Progressive-Java-Updater.jar" "$CLASSES_DIR/Progressive-Java-Updater.jar"
 
-jar --create --file target/Progressive-Java-Client.jar \
+jar --create --file "$JAR_OUTPUT_DIR/Progressive-Java-Client.jar" \
     --main-class com.gradwahl.rs254.Main \
-    --manifest target/manifest.mf \
-    -C target/classes .
+    --manifest "$JAR_OUTPUT_DIR/manifest.mf" \
+    -C "$CLASSES_DIR" .
 
-rm target/manifest.mf
+rm "$JAR_OUTPUT_DIR/manifest.mf"
 
-echo "Build complete: target/Progressive-Java-Client.jar"
-echo "Build complete: target/Progressive-Java-Updater.jar"
+echo "Build complete: Jar Output/Progressive-Java-Client.jar"
+echo "Build complete: Jar Output/Progressive-Java-Updater.jar"
+
+if [ "${SKIP_JPACKAGE:-0}" != "1" ]; then
+    rm -rf "$PACKAGE_INPUT_DIR"
+    mkdir -p "$PACKAGE_INPUT_DIR"
+    cp "$JAR_OUTPUT_DIR/Progressive-Java-Client.jar" "$PACKAGE_INPUT_DIR/"
+    cp "$JAR_OUTPUT_DIR/Progressive-Java-Updater.jar" "$PACKAGE_INPUT_DIR/"
+    cp "$JAR_OUTPUT_DIR/config.json" "$PACKAGE_INPUT_DIR/"
+
+    rm -rf "$EXE_OUTPUT_DIR"
+    mkdir -p "$EXE_OUTPUT_DIR"
+
+    JPACKAGE_ARGS=(
+        --type app-image
+        --name "Progressive Java Client"
+        --app-version "${CLIENT_VERSION:-1.7}"
+        --vendor "Gradwahl"
+        --description "Progressive Java Client"
+        --dest "$EXE_OUTPUT_DIR"
+        --input "$PACKAGE_INPUT_DIR"
+        --main-jar Progressive-Java-Client.jar
+        --arguments "10 0 highmem members 32"
+        --java-options "-Xmx1g"
+        --java-options "-Drs254.logDir=logs"
+        --java-options "-XX:ErrorFile=logs/jvm_crash_%p.log"
+        --java-options "--enable-native-access=ALL-UNNAMED"
+        --java-options "--add-opens=java.base/java.lang=ALL-UNNAMED"
+        --java-options "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED"
+    )
+
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*)
+            JPACKAGE_ARGS+=(--icon src/main/resources/icon.ico)
+            ;;
+    esac
+
+    jpackage "${JPACKAGE_ARGS[@]}"
+    echo "Packaged Progressive Java Client into Exe Output using jpackage type 'app-image'."
+fi
+
 echo "Run with: ./run.sh"

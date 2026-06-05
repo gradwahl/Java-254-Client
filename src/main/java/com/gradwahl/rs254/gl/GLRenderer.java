@@ -621,6 +621,36 @@ public final class GLRenderer implements TriangleRenderer {
     // lifecycle
     // -------------------------------------------------------------------------
 
+    /**
+     * Pick the GLFW windowing backend before {@code glfwInit()}.
+     *
+     * GLFW's Wayland path renders a black window on many Linux setups (NVIDIA
+     * proprietary drivers in particular). The {@code rs254.glfw.platform} system
+     * property (or {@code RS254_GLFW_PLATFORM} env var) lets users force a
+     * backend — typically {@code x11} to run via XWayland. Valid values:
+     * {@code x11}, {@code wayland}, {@code any} (default = let GLFW choose).
+     */
+    private void selectPlatform() {
+        String pref = System.getProperty("rs254.glfw.platform");
+        if (pref == null) pref = System.getenv("RS254_GLFW_PLATFORM");
+        if (pref == null) return;
+        switch (pref.trim().toLowerCase()) {
+            case "x11":
+                glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+                System.err.println("[GL] Forcing GLFW X11 backend (rs254.glfw.platform=x11)");
+                break;
+            case "wayland":
+                glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_WAYLAND);
+                System.err.println("[GL] Forcing GLFW Wayland backend (rs254.glfw.platform=wayland)");
+                break;
+            case "any":
+            case "":
+                break;
+            default:
+                System.err.println("[GL] Unknown rs254.glfw.platform='" + pref + "' (use x11|wayland|any)");
+        }
+    }
+
     private long tryCreateWindow(int w, int h) {
         // Attempt 1: OpenGL 3.3 core profile (preferred)
         glfwDefaultWindowHints();
@@ -648,7 +678,14 @@ public final class GLRenderer implements TriangleRenderer {
     public void init() {
         glfwSetErrorCallback((error, description) ->
             System.err.println("[GLFW ERROR] " + error + ": " + org.lwjgl.glfw.GLFWErrorCallback.getDescription(description)));
+        selectPlatform();
         if (!glfwInit()) throw new IllegalStateException("GLFW init failed");
+        if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+            System.err.println(
+                "[GL] Running on the Wayland backend. If the window is black, force X11 with:\n" +
+                "       java -Drs254.glfw.platform=x11 -jar <jar>\n" +
+                "     (or set RS254_GLFW_PLATFORM=x11). NVIDIA + Wayland is a common cause.");
+        }
 
         // Query the primary monitor's content (DPI) scale so the initial window
         // size produces a framebuffer close to native RS2 physical pixel dimensions.
@@ -673,6 +710,9 @@ public final class GLRenderer implements TriangleRenderer {
         glfwMakeContextCurrent(window);
         glfwSwapInterval(1);
         GL.createCapabilities();
+        System.err.println("[GL] Vendor:   " + glGetString(GL_VENDOR));
+        System.err.println("[GL] Renderer: " + glGetString(GL_RENDERER));
+        System.err.println("[GL] Version:  " + glGetString(GL_VERSION));
 
         setupVAO();
         prog    = buildProgram();

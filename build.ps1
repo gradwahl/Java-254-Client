@@ -1,5 +1,8 @@
 $ErrorActionPreference = "Stop"
 
+$jarOutputDir = "Jar Output"
+$classesDir = Join-Path $jarOutputDir "classes"
+
 if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
     throw "Java is not installed or is not in PATH. Install JDK 17 or newer, then reopen PowerShell."
 }
@@ -8,11 +11,11 @@ if (-not (Get-Command javac -ErrorAction SilentlyContinue)) {
     throw "javac was not found. You have Java Runtime, but not the JDK. Install JDK 17 or newer."
 }
 
-Remove-Item -Recurse -Force target -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force target/classes | Out-Null
+Remove-Item -Recurse -Force $jarOutputDir -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $classesDir | Out-Null
 
 if (Test-Path src/main/resources) {
-    Copy-Item -Recurse src/main/resources/* target/classes/ -Force
+    Copy-Item -Recurse src/main/resources/* "$classesDir/" -Force
 }
 
 $cacheFiles = @(
@@ -23,18 +26,19 @@ $cacheFiles = @(
     "main_file_cache.idx3",
     "main_file_cache.idx4"
 )
-New-Item -ItemType Directory -Force target/classes/cache | Out-Null
+$cacheOutputDir = Join-Path $classesDir "cache"
+New-Item -ItemType Directory -Force $cacheOutputDir | Out-Null
 foreach ($cacheFile in $cacheFiles) {
     $source = Join-Path "cache" $cacheFile
     if (Test-Path $source) {
-        Copy-Item $source target/classes/cache/ -Force
+        Copy-Item $source "$cacheOutputDir/" -Force
     }
 }
 
 Get-ChildItem -Recurse src/main/java -Filter *.java | ForEach-Object FullName | Set-Content sources.txt
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d target/classes '@sources.txt'
+javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d $classesDir '@sources.txt'
 $javacExitCode = $LASTEXITCODE
 $ErrorActionPreference = $previousErrorActionPreference
 Remove-Item sources.txt -Force
@@ -44,7 +48,7 @@ if ($javacExitCode -ne 0) {
 
 # Fold runtime dependencies and LWJGL natives into the artifact so the JAR can
 # be copied and launched without a sibling lib directory.
-Push-Location target/classes
+Push-Location $classesDir
 try {
     Get-ChildItem ../../lib -Filter *.jar | Sort-Object Name | ForEach-Object {
         jar --extract --file $_.FullName
@@ -55,10 +59,10 @@ try {
 } finally {
     Pop-Location
 }
-Remove-Item target/classes/META-INF/MANIFEST.MF -Force -ErrorAction SilentlyContinue
-Remove-Item target/classes/META-INF/*.SF -Force -ErrorAction SilentlyContinue
-Remove-Item target/classes/META-INF/*.DSA -Force -ErrorAction SilentlyContinue
-Remove-Item target/classes/META-INF/*.RSA -Force -ErrorAction SilentlyContinue
+Remove-Item "$classesDir/META-INF/MANIFEST.MF" -Force -ErrorAction SilentlyContinue
+Remove-Item "$classesDir/META-INF/*.SF" -Force -ErrorAction SilentlyContinue
+Remove-Item "$classesDir/META-INF/*.DSA" -Force -ErrorAction SilentlyContinue
+Remove-Item "$classesDir/META-INF/*.RSA" -Force -ErrorAction SilentlyContinue
 
 $clientVersion = if ($env:CLIENT_VERSION) { $env:CLIENT_VERSION.TrimStart("v") } else { "1.7" }
 @"
@@ -68,79 +72,32 @@ $clientVersion = if ($env:CLIENT_VERSION) { $env:CLIENT_VERSION.TrimStart("v") }
   "web_port": 80,
   "game_port": 43594
 }
-"@ | Set-Content -Encoding UTF8 target/config.json
+"@ | Set-Content -Encoding UTF8 (Join-Path $jarOutputDir "config.json")
 @"
 Manifest-Version: 1.0
 Implementation-Version: $clientVersion
 Build-Time: $((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
 
-"@ | Set-Content -Encoding ascii target/manifest.mf
+"@ | Set-Content -Encoding ascii (Join-Path $jarOutputDir "manifest.mf")
+
+$updaterJar = Join-Path $jarOutputDir "Progressive-Java-Updater.jar"
+$clientJar = Join-Path $jarOutputDir "Progressive-Java-Client.jar"
+$manifest = Join-Path $jarOutputDir "manifest.mf"
 
 # Build the updater jar first, then fold it into the client classes so it ships
 # *inside* the client jar. At runtime the client extracts it back beside itself.
-jar --create --file target/Progressive-Java-Updater.jar --main-class com.gradwahl.rs254.update.UpdateHelper -C target/classes com/gradwahl/rs254/update
+jar --create --file $updaterJar --main-class com.gradwahl.rs254.update.UpdateHelper -C $classesDir com/gradwahl/rs254/update
 if ($LASTEXITCODE -ne 0) {
     throw "updater jar failed with exit code $LASTEXITCODE"
 }
-Copy-Item target/Progressive-Java-Updater.jar target/classes/Progressive-Java-Updater.jar -Force
+Copy-Item $updaterJar (Join-Path $classesDir "Progressive-Java-Updater.jar") -Force
 
-jar --create --file target/Progressive-Java-Client.jar --main-class com.gradwahl.rs254.Main --manifest target/manifest.mf -C target/classes .
+jar --create --file $clientJar --main-class com.gradwahl.rs254.Main --manifest $manifest -C $classesDir .
 if ($LASTEXITCODE -ne 0) {
     throw "jar failed with exit code $LASTEXITCODE. Close any running client and rebuild."
 }
-Remove-Item target/manifest.mf
+Remove-Item $manifest
 
-Write-Host "Build complete: target/Progressive-Java-Client.jar"
-Write-Host "Build complete: target/Progressive-Java-Updater.jar"
-
-# Wrap the JAR in a single .exe with the custom icon using Launch4j.
-$launch4jc = "C:\Program Files (x86)\Launch4j\launch4jc.exe"
-if (Test-Path $launch4jc) {
-    $jarAbsPath  = (Resolve-Path "target/Progressive-Java-Client.jar").Path
-    $exeAbsPath  = (Resolve-Path "target").Path + "\Progressive-Java-Client.exe"
-    $icoAbsPath  = (Resolve-Path "src/main/resources/icon.ico").Path
-
-    $xml = @"
-<?xml version="1.0" encoding="UTF-8"?>
-<launch4jConfig>
-  <dontWrapJar>false</dontWrapJar>
-  <headerType>gui</headerType>
-  <jar>$jarAbsPath</jar>
-  <outfile>$exeAbsPath</outfile>
-  <chdir>.</chdir>
-  <errTitle>Progressive Java Client</errTitle>
-  <icon>$icoAbsPath</icon>
-  <jre>
-    <path></path>
-    <minVersion>17</minVersion>
-    <opt>-Xmx1g -Dsun.java2d.noddraw=true -Drs254.logDir=logs -XX:ErrorFile=logs\jvm_crash.log --enable-native-access=ALL-UNNAMED --add-opens java.base/java.lang=ALL-UNNAMED --add-opens java.base/java.lang.reflect=ALL-UNNAMED</opt>
-  </jre>
-  <cmdLine>10 0 highmem members 32</cmdLine>
-  <versionInfo>
-    <fileVersion>1.0.0.0</fileVersion>
-    <txtFileVersion>1.0.0.0</txtFileVersion>
-    <fileDescription>Progressive Java Client</fileDescription>
-    <copyright>Gradwahl</copyright>
-    <productVersion>1.0.0.0</productVersion>
-    <txtProductVersion>1.0.0.0</txtProductVersion>
-    <productName>Progressive Java Client</productName>
-    <companyName>Gradwahl</companyName>
-    <internalName>Progressive-Java-Client</internalName>
-    <originalFilename>Progressive-Java-Client.exe</originalFilename>
-  </versionInfo>
-</launch4jConfig>
-"@
-    $xmlPath = "target\launch4j-config.xml"
-    $xml | Set-Content -Encoding UTF8 $xmlPath
-    & $launch4jc $xmlPath
-    Remove-Item $xmlPath -Force
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Wrapped:       target/Progressive-Java-Client.exe  (double-click to run)"
-    } else {
-        Write-Host "Launch4j failed (exit $LASTEXITCODE) - JAR still usable via run.bat"
-    }
-} else {
-    Write-Host "Launch4j not found at '$launch4jc' - JAR only. Install from https://launch4j.sourceforge.net/"
-}
-
+Write-Host "Build complete: Jar Output/Progressive-Java-Client.jar"
+Write-Host "Build complete: Jar Output/Progressive-Java-Updater.jar"
 Write-Host "Run with: run.bat"
