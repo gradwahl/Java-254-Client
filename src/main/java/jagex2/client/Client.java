@@ -1583,11 +1583,7 @@ public class Client extends GameShell {
 		}
 		try {
 			int var4 = 5;
-			if (this.loadLocalJagChecksums()) {
-				this.drawProgress("Using local cache", 20);
-			} else {
-				this.jagChecksum[8] = 0;
-			}
+			this.jagChecksum[8] = 0;
 			while (this.jagChecksum[8] == 0) {
 				this.drawProgress("Connecting to web server", 20);
 				try {
@@ -1941,26 +1937,6 @@ public class Client extends GameShell {
 			signlink.reporterror("loaderror " + this.lastProgressMessage + " " + this.lastProgressPercent);
 			this.errorLoading = true;
 		}
-	}
-
-	private boolean loadLocalJagChecksums() {
-		if (this.fileStreams[0] == null) {
-			return false;
-		}
-		int[] localChecksums = new int[9];
-		for (int archive = 0; archive < localChecksums.length; archive++) {
-			byte[] data = this.fileStreams[0].read(archive);
-			if (data == null) {
-				System.out.println("[Cache] Local archive " + archive + " missing; falling back to HTTP /crc");
-				return false;
-			}
-			this.crc32.reset();
-			this.crc32.update(data);
-			localChecksums[archive] = (int) this.crc32.getValue();
-		}
-		System.arraycopy(localChecksums, 0, this.jagChecksum, 0, localChecksums.length);
-		System.out.println("[Cache] Using local startup CRCs from cache folder");
-		return true;
 	}
 
 	@ObfuscatedName("client.b(B)V")
