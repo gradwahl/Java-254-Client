@@ -53,8 +53,10 @@ public class PixMap implements ImageProducer, ImageObserver {
 
 	@ObfuscatedName("rb.a(IILjava/awt/Graphics;Z)V")
 	public void draw(int arg0, int arg1, Graphics arg2) {
-		this.setPixels();
-		arg2.drawImage(this.img, arg1, arg0, this);
+		if (arg2 != null) {
+			this.setPixels();
+			arg2.drawImage(this.img, arg1, arg0, this);
+		}
 		// Mirror pixels into uiBuffer so GLRenderer can draw them as a 2D overlay.
 		// Viewport PixMap uses an out-of-range sentinel so we can distinguish
 		// "never drawn" (transparent) from valid RGB pixels such as black and item outlines.

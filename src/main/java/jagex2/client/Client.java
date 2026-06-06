@@ -593,6 +593,8 @@ public class Client extends GameShell {
 	@ObfuscatedName("client.pj")
 	public int[] jagChecksum = new int[9];
 
+	private int[] loginJagChecksum;
+
 	@ObfuscatedName("client.qj")
 	public int minimapLevel = -1;
 
@@ -1419,7 +1421,10 @@ public class Client extends GameShell {
 
 	public URL getCodeBase() {
 		try {
-			URL url = new URL("http://127.0.0.1:" + (portOffset + 80));
+			String host = System.getProperty("rs254.host", "127.0.0.1");
+			int httpPort = Integer.getInteger("rs254.httpPort", portOffset + 80);
+			String scheme = Boolean.getBoolean("rs254.secure") ? "https" : "http";
+			URL url = new URL(scheme, host, httpPort, "/");
 			signlink.codeBase = url;
 			return url;
 		} catch (Exception var1) {
@@ -1433,7 +1438,7 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.L(I)Ljava/lang/String;")
 	public String getHost() {
-		return frame == null ? "127.0.0.1" : "runescape.com";
+		return System.getProperty("rs254.host", frame == null ? "127.0.0.1" : "runescape.com");
 	}
 
 	@ObfuscatedName("client.c(I)Ljava/awt/Component;")
@@ -1448,7 +1453,15 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.h(I)Ljava/net/Socket;")
 	public Socket openSocket(int arg0) throws IOException {
-		return signlink.mainapp == null ? new Socket(InetAddress.getByName(this.getCodeBase().getHost()), arg0) : signlink.opensocket(arg0);
+		int port = Integer.getInteger("rs254.gamePort", arg0);
+		if (signlink.mainapp == null) {
+			URL codeBase = this.getCodeBase();
+			if (codeBase == null) {
+				throw new IOException("could not resolve codebase");
+			}
+			return new Socket(InetAddress.getByName(codeBase.getHost()), port);
+		}
+		return signlink.opensocket(port);
 	}
 
 	@ObfuscatedName("client.a(Ljava/lang/Runnable;I)V")
@@ -1542,7 +1555,6 @@ public class Client extends GameShell {
 			t.printStackTrace(System.err);
 			throw new RuntimeException(t);
 		}
-		if (super.frame != null) super.frame.setVisible(false);
 		boolean var1 = false;
 		String var2 = this.getHost();
 		if (var2.endsWith("jagex.com")) {
@@ -1572,6 +1584,9 @@ public class Client extends GameShell {
 		if (var2.endsWith("127.0.0.1")) {
 			var1 = true;
 		}
+		if (var2.equalsIgnoreCase("localhost")) {
+			var1 = true;
+		}
 		if (!var1) {
 			this.errorHost = true;
 			return;
@@ -1585,6 +1600,7 @@ public class Client extends GameShell {
 			int var4 = 5;
 			if (this.loadLocalJagChecksums()) {
 				this.drawProgress("Using local cache", 20);
+				this.loadLoginJagChecksums();
 			} else {
 				this.jagChecksum[8] = 0;
 			}
@@ -1597,6 +1613,7 @@ public class Client extends GameShell {
 					for (int var7 = 0; var7 < 9; var7++) {
 						this.jagChecksum[var7] = var6.g4();
 					}
+					this.loginJagChecksum = this.jagChecksum.clone();
 					var5.close();
 				} catch (IOException var80) {
 					for (int var8 = var4; var8 > 0; var8--) {
@@ -1948,7 +1965,7 @@ public class Client extends GameShell {
 			return false;
 		}
 		int[] localChecksums = new int[9];
-		for (int archive = 0; archive < localChecksums.length; archive++) {
+		for (int archive = 1; archive < localChecksums.length; archive++) {
 			byte[] data = this.fileStreams[0].read(archive);
 			if (data == null) {
 				System.out.println("[Cache] Local archive " + archive + " missing; falling back to HTTP /crc");
@@ -1961,6 +1978,24 @@ public class Client extends GameShell {
 		System.arraycopy(localChecksums, 0, this.jagChecksum, 0, localChecksums.length);
 		System.out.println("[Cache] Using local startup CRCs from cache folder");
 		return true;
+	}
+
+	private void loadLoginJagChecksums() {
+		try {
+			DataInputStream in = this.openUrl("crc" + (int) (Math.random() * 9.9999999E7D));
+			Packet packet = new Packet(new byte[36]);
+			in.readFully(packet.data, 0, 36);
+			int[] checksums = new int[9];
+			for (int archive = 0; archive < checksums.length; archive++) {
+				checksums[archive] = packet.g4();
+			}
+			in.close();
+			this.loginJagChecksum = checksums;
+			System.out.println("[Cache] Using server CRCs for login validation");
+		} catch (IOException e) {
+			this.loginJagChecksum = this.jagChecksum;
+			System.out.println("[Cache] Server /crc unavailable for login; using local CRCs");
+		}
 	}
 
 	@ObfuscatedName("client.b(B)V")
@@ -2556,8 +2591,9 @@ public class Client extends GameShell {
 				this.login.p1(this.out.pos + 36 + 1 + 1);
 				this.login.p1(254);
 				this.login.p1(lowMem ? 1 : 0);
+				int[] loginChecksums = this.loginJagChecksum != null ? this.loginJagChecksum : this.jagChecksum;
 				for (int var10 = 0; var10 < 9; var10++) {
-					this.login.p4(this.jagChecksum[var10]);
+					this.login.p4(loginChecksums[var10]);
 				}
 				this.login.pdata(0, this.out.data, this.out.pos);
 				this.out.random = new Isaac(var9);
@@ -2575,6 +2611,12 @@ public class Client extends GameShell {
 				}
 				this.login(arg0, arg1, arg2);
 			} else if (var8 == 2) {
+				if (glRenderer != null) {
+					glRenderer.showWindow();
+				}
+				if (super.frame != null) {
+					super.frame.setVisible(false);
+				}
 				this.staffmodlevel = this.stream.read();
 				mouseTracked = this.stream.read() == 1;
 				InputTracking.deactivate();
@@ -5059,7 +5101,7 @@ public class Client extends GameShell {
 
 	@Override
 	protected boolean isHighFpsEnabled() {
-		return GLRenderer.isHighFpsEffectiveEnabled();
+		return this.ingame && GLRenderer.isHighFpsEffectiveEnabled();
 	}
 
 	private void updateEntityAnimationStep() {
