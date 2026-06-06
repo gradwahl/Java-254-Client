@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.zip.CRC32;
 
 public final class Main {
     private Main() {}
@@ -93,6 +94,7 @@ public final class Main {
         File cacheDir = resolveCacheDir();
         String path = cacheDir.getAbsolutePath();
         if (System.getProperty("rs254.cache.dir") == null) {
+            System.setProperty("rs254.cache.bootstrapManaged", "true");
             System.setProperty("rs254.cache.dir", path);
         }
         if (System.getProperty("rs254.cacheDir") == null) {
@@ -149,6 +151,10 @@ public final class Main {
     }
 
     private static boolean hasCompleteCache(File cacheDir) {
+        if (Boolean.getBoolean("rs254.cache.bootstrapManaged")
+                && Main.class.getResource("/cache/main_file_cache.dat") != null) {
+            return hasMatchingBundledCache(cacheDir);
+        }
         for (String name : BUNDLED_CACHE_FILES) {
             File file = new File(cacheDir, name);
             if (!file.isFile() || file.length() == 0) {
@@ -156,6 +162,45 @@ public final class Main {
             }
         }
         return true;
+    }
+
+    private static boolean hasMatchingBundledCache(File cacheDir) {
+        for (String name : BUNDLED_CACHE_FILES) {
+            File file = new File(cacheDir, name);
+            if (!file.isFile() || !resourceMatchesFile("/cache/" + name, file)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean resourceMatchesFile(String resourceName, File file) {
+        try (InputStream resource = Main.class.getResourceAsStream(resourceName);
+             InputStream local = Files.newInputStream(file.toPath())) {
+            if (resource == null || file.length() == 0) {
+                return false;
+            }
+            CRC32 resourceCrc = new CRC32();
+            CRC32 localCrc = new CRC32();
+            byte[] resourceBuffer = new byte[8192];
+            byte[] localBuffer = new byte[8192];
+            int resourceRead;
+            int localRead;
+            do {
+                resourceRead = resource.read(resourceBuffer);
+                localRead = local.read(localBuffer);
+                if (resourceRead != localRead) {
+                    return false;
+                }
+                if (resourceRead > 0) {
+                    resourceCrc.update(resourceBuffer, 0, resourceRead);
+                    localCrc.update(localBuffer, 0, localRead);
+                }
+            } while (resourceRead != -1);
+            return resourceCrc.getValue() == localCrc.getValue();
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private static boolean canUseCacheDir(File dir) {
