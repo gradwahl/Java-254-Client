@@ -730,19 +730,7 @@ public final class GLRenderer implements TriangleRenderer {
         setupCallbacks();
         updateWindowSizeLimits();
         updateOutputViewport();
-        if (Boolean.getBoolean("rs254.gl.showAtStartup")) {
-            showWindow();
-        }
-    }
-
-    public void showWindow() {
-        if (window == NULL || glfwGetWindowAttrib(window, GLFW_VISIBLE) == GLFW_TRUE) {
-            return;
-        }
         glfwShowWindow(window);
-        glfwPollEvents();
-        glClear(GL_COLOR_BUFFER_BIT);
-        glfwSwapBuffers(window);
     }
 
     private void setWindowIcon() {
