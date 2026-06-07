@@ -3289,6 +3289,9 @@ public final class GLRenderer implements TriangleRenderer {
             } else if (sidebarOpen && sidebarTab == 4 && lostHqPage != null) {
                 scrollLostHqPage((int) Math.round(-yoff * 36));
                 if (xoff != 0) scrollLostHqHorizontal((int) Math.round(xoff * 36));
+            } else if (shell != null) {
+                // Forward to game camera zoom (negative yoff = scroll down = zoom out)
+                shell.scrollWheelDelta += (int) Math.round(-yoff);
             }
         });
 
@@ -3442,6 +3445,15 @@ public final class GLRenderer implements TriangleRenderer {
             }
             if (shell == null) return;
             shell.idleCycles = 0;
+            // Camera zoom keys handled directly via booleans (key code > 127, won't fit actionKey)
+            if (key == GLFW_KEY_PAGE_UP) {
+                shell.keyZoomIn = (action != GLFW_RELEASE);
+                return;
+            }
+            if (key == GLFW_KEY_PAGE_DOWN) {
+                shell.keyZoomOut = (action != GLFW_RELEASE);
+                return;
+            }
             int gk = glfwToGameKey(key);
             if (gk < 0) return;
             if (action == GLFW_PRESS || action == GLFW_REPEAT) {

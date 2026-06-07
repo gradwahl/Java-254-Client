@@ -8,7 +8,7 @@ import java.awt.*;
 import java.awt.event.*;
 
 @ObfuscatedName("a")
-public class GameShell extends Panel implements Runnable, MouseListener, MouseMotionListener, KeyListener, FocusListener, WindowListener {
+public class GameShell extends Panel implements Runnable, MouseListener, MouseMotionListener, MouseWheelListener, KeyListener, FocusListener, WindowListener {
 
 	@ObfuscatedName("a.g")
 	public int state;
@@ -112,6 +112,13 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 	private int middleMouseX;
 	private int middleMouseY;
 
+	/** Accumulated scroll-wheel notches since last game tick (negative = zoom in, positive = zoom out). */
+	public volatile int scrollWheelDelta;
+	/** True while Page Up is held (zoom in). */
+	public volatile boolean keyZoomIn;
+	/** True while Page Down is held (zoom out). */
+	public volatile boolean keyZoomOut;
+
 	@ObfuscatedName("a.a(IIB)V")
 	public void initApplication(int arg0, int arg1) {
 		this.setPreferredSize(new Dimension(arg0, arg1));
@@ -137,6 +144,7 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 	public void run() {
 		this.getBaseComponent().addMouseListener(this);
 		this.getBaseComponent().addMouseMotionListener(this);
+		this.getBaseComponent().addMouseWheelListener(this);
 		this.getBaseComponent().addKeyListener(this);
 		this.getBaseComponent().addFocusListener(this);
 		if (this.frame != null) {
@@ -546,9 +554,11 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 		}
 		if (var2 == 33) {
 			var3 = 1002;
+			this.keyZoomIn = true;
 		}
 		if (var2 == 34) {
 			var3 = 1003;
+			this.keyZoomOut = true;
 		}
 		if (var3 > 0 && var3 < 128) {
 			this.actionKey[var3] = 1;
@@ -596,6 +606,12 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 		if (var2 == 10) {
 			var3 = '\n';
 		}
+		if (var2 == 33) {
+			this.keyZoomIn = false;
+		}
+		if (var2 == 34) {
+			this.keyZoomOut = false;
+		}
 		if (var3 > 0 && var3 < 128) {
 			this.actionKey[var3] = 0;
 		}
@@ -605,6 +621,12 @@ public class GameShell extends Panel implements Runnable, MouseListener, MouseMo
 	}
 
 	public void keyTyped(KeyEvent arg0) {
+	}
+
+	@Override
+	public void mouseWheelMoved(MouseWheelEvent e) {
+		this.idleCycles = 0;
+		this.scrollWheelDelta += e.getWheelRotation();
 	}
 
 	@ObfuscatedName("a.a(B)I")

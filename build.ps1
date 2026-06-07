@@ -3,13 +3,40 @@ $ErrorActionPreference = "Stop"
 $jarOutputDir = "Jar Output"
 $classesDir = Join-Path $jarOutputDir "classes"
 
-if (-not (Get-Command java -ErrorAction SilentlyContinue)) {
-    throw "Java is not installed or is not in PATH. Install JDK 17 or newer, then reopen PowerShell."
+# Resolve a JDK 17+ — prefer PATH javac if suitable, otherwise scan Program Files.
+function Find-JavaHome {
+    $javacCmd = Get-Command javac -ErrorAction SilentlyContinue
+    if ($javacCmd) {
+        $ver = (& $javacCmd.Source -version 2>&1) -replace 'javac ', ''
+        $major = [int]($ver -split '[\._]')[0]
+        if ($major -ge 17) { return (Split-Path (Split-Path $javacCmd.Source)) }
+    }
+    $searchRoots = @("$env:ProgramFiles\Java", "$env:ProgramFiles\Eclipse Adoptium",
+                     "$env:ProgramFiles\Microsoft", "$env:ProgramFiles\Amazon Corretto",
+                     "${env:ProgramFiles(x86)}\Java")
+    foreach ($root in $searchRoots) {
+        if (-not (Test-Path $root)) { continue }
+        Get-ChildItem $root -Directory | Sort-Object Name -Descending | ForEach-Object {
+            $javacBin = Join-Path $_.FullName "bin\javac.exe"
+            if (Test-Path $javacBin) {
+                $ver = (& $javacBin -version 2>&1) -replace 'javac ', ''
+                $major = [int]($ver -split '[\._]')[0]
+                if ($major -ge 17) { return $_.FullName }
+            }
+        }
+    }
+    return $null
 }
 
-if (-not (Get-Command javac -ErrorAction SilentlyContinue)) {
-    throw "javac was not found. You have Java Runtime, but not the JDK. Install JDK 17 or newer."
+$javaHome = Find-JavaHome
+if (-not $javaHome) {
+    throw "No JDK 17 or newer found in PATH or Program Files. Download from https://adoptium.net"
 }
+$javaBin  = Join-Path $javaHome "bin\java.exe"
+$javacBin = Join-Path $javaHome "bin\javac.exe"
+$jarBin   = Join-Path $javaHome "bin\jar.exe"
+$javacVer = (& $javacBin -version 2>&1) -replace 'javac ', ''
+Write-Host "Using JDK $javacVer from $javaHome"
 
 Remove-Item -Recurse -Force $jarOutputDir -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $classesDir | Out-Null
@@ -38,7 +65,7 @@ foreach ($cacheFile in $cacheFiles) {
 Get-ChildItem -Recurse src/main/java -Filter *.java | ForEach-Object FullName | Set-Content sources.txt
 $previousErrorActionPreference = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
-javac -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d $classesDir '@sources.txt'
+& $javacBin -J-Xmx1g --release 17 -encoding UTF-8 -cp "lib/*" -d $classesDir '@sources.txt'
 $javacExitCode = $LASTEXITCODE
 $ErrorActionPreference = $previousErrorActionPreference
 Remove-Item sources.txt -Force
@@ -51,7 +78,7 @@ if ($javacExitCode -ne 0) {
 Push-Location $classesDir
 try {
     Get-ChildItem ../../lib -Filter *.jar | Sort-Object Name | ForEach-Object {
-        jar --extract --file $_.FullName
+        & $jarBin --extract --file $_.FullName
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to extract dependency $($_.Name)"
         }
@@ -86,13 +113,13 @@ $manifest = Join-Path $jarOutputDir "manifest.mf"
 
 # Build the updater jar first, then fold it into the client classes so it ships
 # *inside* the client jar. At runtime the client extracts it back beside itself.
-jar --create --file $updaterJar --main-class com.gradwahl.rs254.update.UpdateHelper -C $classesDir com/gradwahl/rs254/update
+& $jarBin --create --file $updaterJar --main-class com.gradwahl.rs254.update.UpdateHelper -C $classesDir com/gradwahl/rs254/update
 if ($LASTEXITCODE -ne 0) {
     throw "updater jar failed with exit code $LASTEXITCODE"
 }
 Copy-Item $updaterJar (Join-Path $classesDir "Progressive-Java-Updater.jar") -Force
 
-jar --create --file $clientJar --main-class com.gradwahl.rs254.Main --manifest $manifest -C $classesDir .
+& $jarBin --create --file $clientJar --main-class com.gradwahl.rs254.Main --manifest $manifest -C $classesDir .
 if ($LASTEXITCODE -ne 0) {
     throw "jar failed with exit code $LASTEXITCODE. Close any running client and rebuild."
 }

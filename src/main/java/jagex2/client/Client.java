@@ -214,6 +214,10 @@ public class Client extends GameShell {
 	@ObfuscatedName("client.Tb")
 	public int orbitCameraPitch = 128;
 
+	/** User-controlled zoom offset added to the base camera distance (orbitCameraPitch * 3 + 600).
+	 *  Negative = zoom in, positive = zoom out. Clamped to [-600, 600]. */
+	public int cameraZoomOffset = 0;
+
 	@ObfuscatedName("client.Yb")
 	public String[] friendName = new String[200];
 
@@ -592,6 +596,7 @@ public class Client extends GameShell {
 
 	@ObfuscatedName("client.pj")
 	public int[] jagChecksum = new int[9];
+	private int[] loginJagChecksum;
 
 	@ObfuscatedName("client.qj")
 	public int minimapLevel = -1;
@@ -1419,7 +1424,10 @@ public class Client extends GameShell {
 
 	public URL getCodeBase() {
 		try {
-			URL url = new URL("http://127.0.0.1:" + (portOffset + 80));
+			String host = System.getProperty("rs254.host", "127.0.0.1");
+			int port = Integer.getInteger("rs254.httpPort", portOffset + 80);
+			String spec = port == 80 ? "http://" + host : "http://" + host + ":" + port;
+			URL url = new URL(spec);
 			signlink.codeBase = url;
 			return url;
 		} catch (Exception var1) {
@@ -1583,7 +1591,12 @@ public class Client extends GameShell {
 		}
 		try {
 			int var4 = 5;
-			this.jagChecksum[8] = 0;
+			if (this.loadLocalJagChecksums()) {
+				this.drawProgress("Using local cache", 20);
+				this.loadLoginJagChecksums();
+			} else {
+				this.jagChecksum[8] = 0;
+			}
 			while (this.jagChecksum[8] == 0) {
 				this.drawProgress("Connecting to web server", 20);
 				try {
@@ -1593,6 +1606,7 @@ public class Client extends GameShell {
 					for (int var7 = 0; var7 < 9; var7++) {
 						this.jagChecksum[var7] = var6.g4();
 					}
+					this.loginJagChecksum = this.jagChecksum.clone();
 					var5.close();
 				} catch (IOException var80) {
 					for (int var8 = var4; var8 > 0; var8--) {
@@ -1936,6 +1950,44 @@ public class Client extends GameShell {
 		} catch (Exception var81) {
 			signlink.reporterror("loaderror " + this.lastProgressMessage + " " + this.lastProgressPercent);
 			this.errorLoading = true;
+		}
+	}
+
+	private boolean loadLocalJagChecksums() {
+		if (this.fileStreams[0] == null) {
+			return false;
+		}
+		int[] localChecksums = new int[9];
+		for (int archive = 1; archive < localChecksums.length; archive++) {
+			byte[] data = this.fileStreams[0].read(archive);
+			if (data == null) {
+				System.out.println("[Cache] Local archive " + archive + " missing; falling back to HTTP /crc");
+				return false;
+			}
+			this.crc32.reset();
+			this.crc32.update(data);
+			localChecksums[archive] = (int) this.crc32.getValue();
+		}
+		System.arraycopy(localChecksums, 0, this.jagChecksum, 0, localChecksums.length);
+		System.out.println("[Cache] Using local startup CRCs from cache folder");
+		return true;
+	}
+
+	private void loadLoginJagChecksums() {
+		try {
+			DataInputStream in = this.openUrl("crc" + (int) (Math.random() * 9.9999999E7D));
+			Packet packet = new Packet(new byte[36]);
+			in.readFully(packet.data, 0, 36);
+			int[] checksums = new int[9];
+			for (int archive = 0; archive < checksums.length; archive++) {
+				checksums[archive] = packet.g4();
+			}
+			in.close();
+			this.loginJagChecksum = checksums;
+			System.out.println("[Cache] Using server CRCs for login validation");
+		} catch (IOException e) {
+			this.loginJagChecksum = this.jagChecksum;
+			System.out.println("[Cache] Server /crc unavailable for login; using local CRCs");
 		}
 	}
 
@@ -2532,8 +2584,9 @@ public class Client extends GameShell {
 				this.login.p1(this.out.pos + 36 + 1 + 1);
 				this.login.p1(254);
 				this.login.p1(lowMem ? 1 : 0);
+				int[] loginChecksums = this.loginJagChecksum != null ? this.loginJagChecksum : this.jagChecksum;
 				for (int var10 = 0; var10 < 9; var10++) {
-					this.login.p4(this.jagChecksum[var10]);
+					this.login.p4(loginChecksums[var10]);
 				}
 				this.login.pdata(0, this.out.data, this.out.pos);
 				this.out.random = new Isaac(var9);
@@ -4285,6 +4338,20 @@ public class Client extends GameShell {
 			} else if (var12 < this.cameraPitchClamp) {
 				this.cameraPitchClamp += (var12 - this.cameraPitchClamp) / 80;
 			}
+			// Scroll-wheel zoom: consume accumulated notches (negative = zoom in).
+			int scroll = super.scrollWheelDelta;
+			if (scroll != 0) {
+				super.scrollWheelDelta = 0;
+				this.cameraZoomOffset += scroll * 80;
+			}
+			// Page Up / Page Down held zoom.
+			if (super.keyZoomIn) {
+				this.cameraZoomOffset -= 20;
+			}
+			if (super.keyZoomOut) {
+				this.cameraZoomOffset += 20;
+			}
+			this.cameraZoomOffset = Math.max(-600, Math.min(600, this.cameraZoomOffset));
 		} catch (Exception var13) {
 			signlink.reporterror("glfc_ex " + localPlayer.x + "," + localPlayer.z + "," + this.orbitCameraX + "," + this.orbitCameraZ + "," + this.sceneCenterZoneX + "," + this.sceneCenterZoneZ + "," + this.sceneBaseTileX + "," + this.sceneBaseTileZ);
 			throw new RuntimeException("eek");
@@ -5546,7 +5613,7 @@ public class Client extends GameShell {
 			// interpolation can feed intermediate values into the world visibility
 			// and projective texture math, causing transient black terrain flashes
 			// on some GPUs in 60 FPS mode.
-			this.camFollow(var2, this.orbitCameraX, this.getAvH(localPlayer.z, this.minusedlevel, localPlayer.x) - 50, this.orbitCameraZ, var2 * 3 + 600, var3);
+			this.camFollow(var2, this.orbitCameraX, this.getAvH(localPlayer.z, this.minusedlevel, localPlayer.x) - 50, this.orbitCameraZ, var2 * 3 + 600 + this.cameraZoomOffset, var3);
 		}
 		int var4;
 		if (this.cutscene) {
