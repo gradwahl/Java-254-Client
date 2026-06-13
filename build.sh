@@ -11,18 +11,11 @@ if ! command -v javac &>/dev/null; then
     exit 1
 fi
 
-if [ "${SKIP_JPACKAGE:-0}" != "1" ] && ! command -v jpackage &>/dev/null; then
-    echo "ERROR: jpackage not found. Install JDK 17 or newer." >&2
-    exit 1
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 JAR_OUTPUT_DIR="Jar Output"
-EXE_OUTPUT_DIR="Exe Output"
 CLASSES_DIR="$JAR_OUTPUT_DIR/classes"
-PACKAGE_INPUT_DIR="$JAR_OUTPUT_DIR/jpackage-input"
 
 rm -rf "$JAR_OUTPUT_DIR"
 mkdir -p "$CLASSES_DIR"
@@ -87,43 +80,4 @@ rm "$JAR_OUTPUT_DIR/manifest.mf"
 
 echo "Build complete: Jar Output/Progressive-Java-Client.jar"
 echo "Build complete: Jar Output/Progressive-Java-Updater.jar"
-
-if [ "${SKIP_JPACKAGE:-0}" != "1" ]; then
-    rm -rf "$PACKAGE_INPUT_DIR"
-    mkdir -p "$PACKAGE_INPUT_DIR"
-    cp "$JAR_OUTPUT_DIR/Progressive-Java-Client.jar" "$PACKAGE_INPUT_DIR/"
-    cp "$JAR_OUTPUT_DIR/Progressive-Java-Updater.jar" "$PACKAGE_INPUT_DIR/"
-    cp "$JAR_OUTPUT_DIR/config.json" "$PACKAGE_INPUT_DIR/"
-
-    rm -rf "$EXE_OUTPUT_DIR"
-    mkdir -p "$EXE_OUTPUT_DIR"
-
-    JPACKAGE_ARGS=(
-        --type app-image
-        --name "Progressive Java Client"
-        --app-version "${CLIENT_VERSION:-1.7}"
-        --vendor "Gradwahl"
-        --description "Progressive Java Client"
-        --dest "$EXE_OUTPUT_DIR"
-        --input "$PACKAGE_INPUT_DIR"
-        --main-jar Progressive-Java-Client.jar
-        --arguments "10 0 highmem members 32"
-        --java-options "-Xmx1g"
-        --java-options "-Drs254.logDir=logs"
-        --java-options "-XX:ErrorFile=logs/jvm_crash_%p.log"
-        --java-options "--enable-native-access=ALL-UNNAMED"
-        --java-options "--add-opens=java.base/java.lang=ALL-UNNAMED"
-        --java-options "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED"
-    )
-
-    case "$(uname -s)" in
-        MINGW*|MSYS*|CYGWIN*)
-            JPACKAGE_ARGS+=(--icon src/main/resources/icon.ico)
-            ;;
-    esac
-
-    jpackage "${JPACKAGE_ARGS[@]}"
-    echo "Packaged Progressive Java Client into Exe Output using jpackage type 'app-image'."
-fi
-
 echo "Run with: ./run.sh"

@@ -29,7 +29,6 @@ fi
 
 # Auto-download LWJGL natives for this platform if not present
 MISSING=0
-REBUILD=0
 for mod in "${MODULES[@]}"; do
     jar="lib/${mod}-${LWJGL_VERSION}-${NATIVES_CLASSIFIER}.jar"
     if [ ! -f "$jar" ]; then
@@ -57,31 +56,17 @@ if [ "$MISSING" -eq 1 ]; then
         fi
     done
     echo "Natives downloaded."
-    REBUILD=1
 fi
 
-case "$OS" in
-    MINGW*|MSYS*|CYGWIN*)
-        APP_PATH="$SCRIPT_DIR/Exe Output/Progressive Java Client/Progressive Java Client.exe"
-        ;;
-    Darwin)
-        APP_PATH="$SCRIPT_DIR/Exe Output/Progressive Java Client.app/Contents/MacOS/Progressive Java Client"
-        ;;
-    Linux)
-        APP_PATH="$SCRIPT_DIR/Exe Output/Progressive Java Client/bin/Progressive Java Client"
-        ;;
-    *)
-        echo "ERROR: Unsupported OS: $OS" >&2
-        exit 1
-        ;;
-esac
+bash build.sh
 
-if [ ! -x "$APP_PATH" ] || [ "$REBUILD" -eq 1 ]; then
-    bash build.sh
-fi
-
-echo "Starting packaged RS2 client..."
-"$APP_PATH"
+echo "Starting RS2 client..."
+java \
+    --enable-native-access=ALL-UNNAMED \
+    --add-opens=java.base/java.lang=ALL-UNNAMED \
+    --add-opens=java.base/java.lang.reflect=ALL-UNNAMED \
+    -Dsun.java2d.noddraw=true \
+    -jar "Jar Output/Progressive-Java-Client.jar"
 
 EXIT_CODE=$?
 if [ $EXIT_CODE -ne 0 ]; then

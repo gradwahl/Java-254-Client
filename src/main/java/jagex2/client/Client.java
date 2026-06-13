@@ -5958,17 +5958,17 @@ public class Client extends GameShell {
 					if (var7.headicon >= 0 && var7.headicon < this.imageHeadicons.length) {
 						this.getOverlayPos(var3.height + 15, var3);
 						if (this.projectX > -1) {
-							this.imageHeadicons[var7.headicon].plotSprite(this.projectX - 12, this.projectY - 30);
+							this.imageHeadicons[var7.headicon].plotSprite(this.projectX - 12, this.projectY - 40);
 						}
 					}
 					if (this.hintType == 1 && this.hintNpc == this.npcIds[var2 - this.playerCount] && loopCycle % 20 < 10) {
 						this.getOverlayPos(var3.height + 15, var3);
 						if (this.projectX > -1) {
-							this.imageHeadicons[2].plotSprite(this.projectX - 12, this.projectY - 28);
+							this.imageHeadicons[2].plotSprite(this.projectX - 12, this.projectY - 38);
 						}
 					}
 				} else {
-					int var4 = 30;
+					int var4 = 40;
 					ClientPlayer var5 = (ClientPlayer) var3;
 					if (var5.headicon != 0) {
 						this.getOverlayPos(var3.height + 15, var3);
@@ -6034,9 +6034,9 @@ public class Client extends GameShell {
 								this.projectX += 15;
 								this.projectY -= 10;
 							}
-							this.imageHitmarks[var3.damageType[var9]].plotSprite(this.projectX - 12, this.projectY - 12);
-							this.fontPlain11.centreString(this.projectY + 4, String.valueOf(var3.damage[var9]), this.projectX, 0);
-							this.fontPlain11.centreString(this.projectY + 3, String.valueOf(var3.damage[var9]), this.projectX - 1, 16777215);
+							this.imageHitmarks[var3.damageType[var9]].plotSprite(this.projectX - 12, this.projectY - 22);
+							this.fontPlain11.centreString(this.projectY - 6, String.valueOf(var3.damage[var9]), this.projectX, 0);
+							this.fontPlain11.centreString(this.projectY - 7, String.valueOf(var3.damage[var9]), this.projectX - 1, 16777215);
 						}
 					}
 				}

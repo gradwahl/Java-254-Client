@@ -3,11 +3,9 @@ Set-Location $PSScriptRoot
 
 $jar = "Jar Output\Progressive-Java-Client.jar"
 
-if (-not (Test-Path $jar)) {
-    Write-Host "JAR not found - building first..."
-    & "$PSScriptRoot\build.ps1"
-    if ($LASTEXITCODE -ne 0) { throw "Build failed." }
-}
+Write-Host "Cleaning and building..."
+& "$PSScriptRoot\build.ps1"
+if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 
 function Find-JavaHome {
     $javacCmd = Get-Command javac -ErrorAction SilentlyContinue
